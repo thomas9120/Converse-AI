@@ -66,6 +66,9 @@ class VADProvider(Protocol):
     async def process_frame(self, frame) -> list[VADEvent]:
         ...
 
+    async def unload(self) -> ProviderStatus:
+        ...
+
 
 class ASRProvider(Protocol):
     @property
@@ -81,6 +84,9 @@ class ASRProvider(Protocol):
     async def transcribe_audio(
         self, pcm_s16le: bytes, sample_rate: int, progress: ProgressCallback | None = None
     ) -> AsyncIterator[TranscriptEvent]:
+        ...
+
+    async def unload(self) -> ProviderStatus:
         ...
 
 

@@ -130,3 +130,6 @@ class LlamaCppProvider(LLMProvider):
         if not model_data:
             raise RuntimeError("llama.cpp did not report a loaded model from /v1/models")
         return str(model_data[0].get("id", "unknown"))
+
+    async def unload(self) -> ProviderStatus:
+        return self.status

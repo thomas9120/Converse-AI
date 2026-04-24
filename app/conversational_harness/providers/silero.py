@@ -17,7 +17,7 @@ class SileroModel(Protocol):
 
 class SileroVADProvider(VADProvider):
     def __init__(self, config: dict):
-        self.threshold = float(config.get("speech_threshold", 0.5))
+        self.threshold = float(config.get("speech_threshold", 0.6))
         self.neg_threshold = float(config.get("neg_threshold", max(0.15, self.threshold - 0.15)))
         self.hangover_ms = int(config.get("hangover_ms", 450))
         self.window_samples = int(config.get("window_samples", 512))
@@ -76,6 +76,13 @@ class SileroVADProvider(VADProvider):
         self._audio_ms = 0
         if self._model:
             self._model.reset_states()
+
+    async def unload(self) -> ProviderStatus:
+        self._model = None
+        self._torch = None
+        self._buffer.clear()
+        self._load_error = None
+        return self.status
 
     def _ensure_model(self) -> None:
         if self._model is not None or self._load_error:

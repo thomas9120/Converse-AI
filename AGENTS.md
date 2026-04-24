@@ -40,6 +40,7 @@ This project is intended to become a local, modular conversational AI harness fo
 - Do not assume Windows, Linux, and macOS audio stacks behave the same. Keep audio device handling isolated.
 - Do not build startup around one long opaque command. Start services explicitly and show per-service readiness.
 - Do not rely on global Python packages. Use a project environment managed by the install scripts.
+- Do not assume the system CUDA toolkit version matches what CTranslate2 needs. CTranslate2 ships with `cudnn64_*.dll` but requires `cublas64_12.dll` at runtime. If the system CUDA toolkit is v13+, `cublas64_12.dll` will be missing and CUDA inference will fail with `RuntimeError: Library cublas64_12.dll is not found or cannot be loaded`. The fix is `pip install nvidia-cublas-cu12` into the project venv, and the `start.ps1` script adds the NVIDIA bin directories to `PATH` before launching uvicorn. Without this, CUDA ASR silently hangs because the error is thrown inside an `asyncio.to_thread` worker.
 
 ## Modularity Guidelines
 

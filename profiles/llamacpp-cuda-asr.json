@@ -10,9 +10,10 @@
   },
   "vad": {
     "provider": "silero",
-    "speech_threshold": 0.5,
+    "speech_threshold": 0.6,
     "neg_threshold": 0.35,
-    "hangover_ms": 450
+    "hangover_ms": 450,
+    "min_speech_duration_ms": 200
   },
   "asr": {
     "provider": "faster-whisper",

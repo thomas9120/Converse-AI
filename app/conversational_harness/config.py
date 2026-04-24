@@ -8,7 +8,7 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PROFILE = PROJECT_ROOT / "profiles" / "llamacpp-local.json"
+DEFAULT_PROFILE = PROJECT_ROOT / "profiles" / "llamacpp-cuda-asr.json"
 
 
 @dataclass(frozen=True)
