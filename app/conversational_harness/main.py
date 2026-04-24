@@ -38,9 +38,30 @@ async def status() -> dict[str, Any]:
             "description": config.raw.get("description", ""),
             "audio": config.section("audio"),
             "turn": config.section("turn"),
+            "summary": profile_summary(config.raw),
         },
         "providers": provider_statuses,
     }
+
+
+def profile_summary(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = []
+    for kind in ("vad", "asr", "llm", "tts"):
+        section = raw.get(kind, {})
+        if not isinstance(section, dict):
+            continue
+        summary.append(
+            {
+                "kind": kind,
+                "provider": section.get("provider", "mock"),
+                "model": section.get("model"),
+                "device": section.get("device"),
+                "compute_type": section.get("compute_type"),
+                "endpoint": section.get("base_url") or section.get("url"),
+                "voice": section.get("voice"),
+            }
+        )
+    return summary
 
 
 @app.websocket("/ws/events")
@@ -71,7 +92,12 @@ async def websocket_events(websocket: WebSocket) -> None:
 
     async def sender() -> None:
         await websocket.send_json({"type": "profile.loaded", "payload": {"name": config.name}})
-        await websocket.send_json({"type": "providers.status", "payload": {"providers": await providers.check_statuses()}})
+        await websocket.send_json(
+            {
+                "type": "providers.status",
+                "payload": {"providers": await providers.check_statuses(), "summary": profile_summary(config.raw)},
+            }
+        )
         while True:
             event = await queue.get()
             await websocket.send_json(event)
@@ -85,13 +111,25 @@ async def websocket_events(websocket: WebSocket) -> None:
             payload = message.get("payload", {})
             if message_type == "user.text":
                 text = str(payload.get("text", "")).strip()
+                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")))
                 if not text:
                     continue
                 if active_turn and not active_turn.done():
                     active_turn.cancel()
                     await sink.emit("turn.cancelled", reason="new_user_text")
                 active_turn = asyncio.create_task(orchestrator.handle_text_turn(text))
+            elif message_type == "system_prompt.update":
+                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")))
+                await sink.emit("system_prompt.updated", enabled=bool(orchestrator.state.system_prompt))
+            elif message_type == "conversation.clear":
+                if active_turn and not active_turn.done():
+                    active_turn.cancel()
+                    await sink.emit("turn.cancelled", reason="conversation_clear")
+                await orchestrator.clear_conversation()
+            elif message_type == "tts.cancel":
+                await orchestrator.cancel_tts("manual")
             elif message_type == "vad.speech_start":
+                orchestrator.set_system_prompt(str(payload.get("system_prompt", orchestrator.state.system_prompt)))
                 await orchestrator.cancel_tts("barge_in")
                 await sink.emit("vad.speech_start", source="browser")
             elif message_type == "audio.frame":

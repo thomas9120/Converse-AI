@@ -69,3 +69,41 @@ def test_llamacpp_configured_model_mismatch(monkeypatch):
 
     assert not check.ok
     assert "not loaded" in check.detail
+
+
+def test_find_port_owner_parses_windows_netstat(monkeypatch):
+    monkeypatch.setattr(doctor.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        doctor.subprocess,
+        "check_output",
+        lambda *args, **kwargs: "  TCP    127.0.0.1:7860    0.0.0.0:0    LISTENING    4321\r\n",
+    )
+    monkeypatch.setattr(doctor, "find_process_command", lambda pid: "python -m uvicorn app")
+
+    owner = doctor.find_port_owner(7860)
+
+    assert owner == {"pid": "4321", "command": "python -m uvicorn app"}
+
+
+def test_check_port_available_reports_owner(monkeypatch):
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return None
+
+        def settimeout(self, timeout):
+            return None
+
+        def connect_ex(self, address):
+            return 0
+
+    monkeypatch.setattr(doctor.socket, "socket", lambda *args, **kwargs: FakeSocket())
+    monkeypatch.setattr(doctor, "find_port_owner", lambda port: {"pid": "4321", "command": "python app"})
+
+    check = doctor.check_port_available(7860)
+
+    assert not check.ok
+    assert "PID 4321" in check.detail
+    assert "python app" in check.detail

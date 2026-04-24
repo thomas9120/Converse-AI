@@ -5,6 +5,7 @@ import asyncio
 import platform
 import shutil
 import socket
+import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -72,8 +73,52 @@ def check_port_available(port: int) -> Check:
         sock.settimeout(0.25)
         result = sock.connect_ex(("127.0.0.1", port))
     if result == 0:
-        return Check("Harness port", False, f"127.0.0.1:{port} is already in use; run stop.ps1/stop.sh if it is this harness")
+        owner = find_port_owner(port)
+        detail = f"127.0.0.1:{port} is already in use"
+        if owner:
+            detail += f" by PID {owner['pid']}"
+            if owner.get("command"):
+                detail += f" ({owner['command']})"
+        detail += "; run stop.ps1/stop.sh if it is this harness"
+        return Check("Harness port", False, detail)
     return Check("Harness port", True, f"127.0.0.1:{port} is available")
+
+
+def find_port_owner(port: int) -> dict[str, str] | None:
+    if platform.system() != "Windows":
+        return None
+    try:
+        output = subprocess.check_output(["netstat", "-ano", "-p", "tcp"], text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        return None
+
+    pid = None
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        local_address = parts[1]
+        state = parts[3].upper()
+        if state == "LISTENING" and local_address.rsplit(":", 1)[-1] == str(port):
+            pid = parts[-1]
+            break
+    if not pid:
+        return None
+    return {"pid": pid, "command": find_process_command(pid) or ""}
+
+
+def find_process_command(pid: str) -> str | None:
+    try:
+        output = subprocess.check_output(
+            ["powershell", "-NoProfile", "-Command", f"(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except Exception:
+        return None
+    command = " ".join(output.split())
+    return command or None
 
 
 def check_cuda_tooling() -> Check:

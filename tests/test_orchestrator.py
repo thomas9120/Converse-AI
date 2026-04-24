@@ -5,6 +5,22 @@ from conversational_harness.orchestrator import ConversationOrchestrator, QueueE
 from conversational_harness.providers import build_providers
 
 
+class RecordingLLM:
+    def __init__(self):
+        self.messages = []
+
+    @property
+    def status(self):
+        raise NotImplementedError
+
+    async def check_status(self):
+        raise NotImplementedError
+
+    async def stream_response(self, messages):
+        self.messages.append(messages)
+        yield "ok."
+
+
 def test_should_flush_tts_on_sentence_or_limit():
     assert should_flush_tts("Hello there.", 120)
     assert should_flush_tts("x" * 121, 120)
@@ -59,6 +75,10 @@ def test_tts_audio_event_carries_latency():
 
     assert isinstance(payload.get("latency_ms"), int)
     assert payload["latency_ms"] >= 0
+    assert payload["chunk_index"] == 1
+    assert payload["text_chars"] > 0
+    assert payload["byte_length"] > 0
+    assert payload["turn_id"] == 1
 
 
 def test_audio_turn_emits_asr_and_llm_events():
@@ -82,3 +102,46 @@ def test_audio_turn_emits_asr_and_llm_events():
     assert "asr.transcript" in events
     assert "llm.first_token" in events
     assert "turn.finished" in events
+
+
+def test_system_prompt_is_prepended_to_llm_messages():
+    async def run_turn():
+        config = load_config("profiles/mock-local.json")
+        providers = build_providers(config)
+        llm = RecordingLLM()
+        providers.llm = llm
+        queue = asyncio.Queue()
+        orchestrator = ConversationOrchestrator(providers, QueueEventSink(queue), tts_chunk_chars=60)
+
+        orchestrator.set_system_prompt("Answer like a terse local assistant.")
+        await orchestrator.handle_text_turn("hello harness")
+        await asyncio.sleep(0.05)
+        return llm.messages[0]
+
+    messages = asyncio.run(run_turn())
+
+    assert messages[0] == {"role": "system", "content": "Answer like a terse local assistant."}
+    assert messages[1] == {"role": "user", "content": "hello harness"}
+
+
+def test_clear_conversation_removes_history():
+    async def run_turn():
+        config = load_config("profiles/mock-local.json")
+        providers = build_providers(config)
+        queue = asyncio.Queue()
+        orchestrator = ConversationOrchestrator(providers, QueueEventSink(queue), tts_chunk_chars=60)
+
+        await orchestrator.handle_text_turn("hello harness")
+        await asyncio.sleep(0.15)
+        assert orchestrator.state.messages
+
+        await orchestrator.clear_conversation()
+        events = []
+        while not queue.empty():
+            events.append((await queue.get())["type"])
+        return orchestrator.state.messages, events
+
+    messages, events = asyncio.run(run_turn())
+
+    assert messages == []
+    assert "conversation.cleared" in events

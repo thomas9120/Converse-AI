@@ -25,7 +25,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -68,7 +69,9 @@ h2 {
 
 .controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  justify-content: flex-end;
 }
 
 button {
@@ -100,6 +103,38 @@ button:not(:disabled):hover {
 #send:not(:disabled):hover,
 #connect:not(:disabled):hover {
   background: var(--accent-strong);
+}
+
+.prompt-panel {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px 12px;
+}
+
+.prompt-panel label {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+textarea {
+  min-height: 72px;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 10px;
+  color: var(--text);
+}
+
+textarea:focus {
+  border-color: var(--accent);
+  outline: none;
 }
 
 .status-grid {
@@ -309,6 +344,10 @@ input:focus {
   }
 
   .audio-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-panel {
     grid-template-columns: 1fr;
   }
 

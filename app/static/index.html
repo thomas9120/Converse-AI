@@ -17,10 +17,17 @@
           <button id="mic" type="button" disabled>Start Mic</button>
           <button id="connect" type="button">Connect</button>
           <button id="barge" type="button" disabled>Barge In</button>
+          <button id="stop-audio" type="button" disabled>Stop Audio</button>
+          <button id="clear" type="button" disabled>Clear</button>
         </div>
       </section>
 
       <section class="status-grid" id="providers"></section>
+
+      <section class="prompt-panel">
+        <label for="system-prompt">System prompt</label>
+        <textarea id="system-prompt" rows="3" placeholder="Optional instructions for the assistant. Applies to typed and voice turns."></textarea>
+      </section>
 
       <section class="audio-panel">
         <label for="device">Microphone</label>

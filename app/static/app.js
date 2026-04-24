@@ -6,8 +6,10 @@ const state = {
   playbackStarted: false,
   playbackContext: null,
   nextAudioTime: 0,
+  playbackLeadTime: 0.035,
   scheduledSources: [],
   providersReady: false,
+  currentTurnId: null,
   profileAudio: { sample_rate: 16000, channels: 1, frame_ms: 30 },
   mic: {
     active: false,
@@ -28,6 +30,8 @@ const eventsEl = document.querySelector("#events");
 const connectButton = document.querySelector("#connect");
 const micButton = document.querySelector("#mic");
 const bargeButton = document.querySelector("#barge");
+const stopAudioButton = document.querySelector("#stop-audio");
+const clearButton = document.querySelector("#clear");
 const sendButton = document.querySelector("#send");
 const deviceSelect = document.querySelector("#device");
 const levelEl = document.querySelector("#level");
@@ -37,31 +41,46 @@ const ttsStateEl = document.querySelector("#tts-state");
 const audioStatusEl = document.querySelector("#audio-status");
 const composer = document.querySelector("#composer");
 const textInput = document.querySelector("#text");
+const systemPromptInput = document.querySelector("#system-prompt");
+let systemPromptTimer = null;
 
 async function loadStatus() {
   const response = await fetch("/api/status");
   const status = await response.json();
   state.profileAudio = status.profile.audio || state.profileAudio;
   profileEl.textContent = `${status.profile.name} - ${status.profile.description}`;
-  renderProviders(status.providers);
+  renderProviders(status.providers, status.profile.summary || []);
   await loadInputDevices();
 }
 
-function renderProviders(providers) {
+function renderProviders(providers, summary = []) {
   providersEl.innerHTML = "";
   state.providersReady = providers.every((provider) => provider.ready);
   updateSendState();
   for (const provider of providers) {
+    const details = summary.find((item) => item.kind === provider.kind) || {};
+    const detailText = formatProviderDetails(details);
     const node = document.createElement("article");
     node.className = "provider";
     node.dataset.ready = provider.ready ? "true" : "false";
     node.innerHTML = `
       <strong>${provider.kind}: ${provider.name}</strong>
       <span>${provider.ready ? "ready" : "not ready"}</span>
+      ${detailText ? `<p>${detailText}</p>` : ""}
       <p>${provider.message}</p>
     `;
     providersEl.appendChild(node);
   }
+}
+
+function formatProviderDetails(details) {
+  const parts = [];
+  for (const key of ["provider", "model", "device", "compute_type", "endpoint", "voice"]) {
+    if (details[key]) {
+      parts.push(`${key}: ${details[key]}`);
+    }
+  }
+  return parts.join(" | ");
 }
 
 function connect() {
@@ -75,12 +94,15 @@ function connect() {
     connectButton.textContent = "Disconnect";
     updateSendState();
     updateMicState();
+    sendSystemPromptUpdate();
     addSystemMessage("Connected");
   });
   state.ws.addEventListener("close", () => {
     connectButton.textContent = "Connect";
     sendButton.disabled = true;
     bargeButton.disabled = true;
+    stopAudioButton.disabled = true;
+    clearButton.disabled = true;
     updateMicState();
     addSystemMessage("Disconnected");
   });
@@ -93,10 +115,12 @@ function handleEvent(event) {
   addEvent(event.type);
   const payload = event.payload || {};
   if (event.type === "providers.status") {
-    renderProviders(payload.providers);
+    renderProviders(payload.providers, payload.summary || []);
   } else if (event.type === "turn.started") {
     latencyEl.innerHTML = "";
+    state.currentTurnId = payload.turn_id || null;
     state.playbackStarted = false;
+    resetPlaybackClock();
   } else if (event.type === "asr.transcript" && payload.final) {
     updateAsrState(false, "ASR done");
     setLatency("ASR final", payload.latency_ms);
@@ -122,14 +146,15 @@ function handleEvent(event) {
     updateTtsState(true, "TTS playing");
     setLatency("TTS first chunk", payload.latency_ms);
   } else if (event.type === "tts.audio") {
-    enqueueAudio(payload.mime_type, payload.data, payload.latency_ms);
+    setLatency(`TTS chunk ${payload.chunk_index}`, payload.latency_ms);
+    enqueueAudio(payload);
   } else if (event.type === "tts.progress") {
     updateTtsState(true, payload.message || `TTS ${payload.stage}`);
   } else if (event.type === "tts.error") {
     updateTtsState(false, `TTS error: ${payload.message}`);
   } else if (event.type === "audio.input_level") {
     updateInputLevel(payload.rms, payload.peak);
-    audioStatusEl.textContent = `Mic ${Math.round((payload.rms || 0) * 100)}% · ${payload.received_frames} frames`;
+    audioStatusEl.textContent = `Mic ${Math.round((payload.rms || 0) * 100)}% - ${payload.received_frames} frames`;
   } else if (event.type === "audio.frame_error") {
     audioStatusEl.textContent = `Audio error: ${payload.message}`;
   } else if (event.type === "vad.probability") {
@@ -150,6 +175,10 @@ function handleEvent(event) {
   } else if (event.type === "tts.cancelled") {
     stopAudio();
     updateTtsState(false, "TTS cancelled");
+  } else if (event.type === "conversation.cleared") {
+    conversationEl.innerHTML = "";
+    latencyEl.innerHTML = "";
+    addSystemMessage("Conversation cleared");
   }
 }
 
@@ -169,6 +198,8 @@ function addSystemMessage(text) {
 function updateSendState() {
   const connected = state.ws && state.ws.readyState === WebSocket.OPEN;
   sendButton.disabled = !connected || !state.providersReady;
+  clearButton.disabled = !connected;
+  stopAudioButton.disabled = !connected;
   updateMicState();
   if (!state.providersReady) {
     textInput.placeholder = "A required provider is not ready. Check the status cards above.";
@@ -235,6 +266,7 @@ async function toggleMic() {
     audioStatusEl.textContent = "Connect before starting mic";
     return;
   }
+  sendSystemPromptUpdate();
   const constraints = {
     audio: {
       channelCount: 1,
@@ -263,7 +295,7 @@ async function toggleMic() {
   source.connect(processor);
   processor.connect(context.destination);
   await loadInputDevices();
-  audioStatusEl.textContent = `Mic active · ${context.sampleRate} Hz browser input`;
+  audioStatusEl.textContent = `Mic active - ${context.sampleRate} Hz browser input`;
   updateMicState();
 }
 
@@ -373,7 +405,7 @@ function updateVadState(speaking, probability) {
   }
   const active = vadStateEl.dataset.speaking === "true";
   const prob = probability === undefined || probability === null ? "--" : probability.toFixed(2);
-  vadStateEl.textContent = `${active ? "VAD speaking" : "VAD idle"} · ${prob}`;
+  vadStateEl.textContent = `${active ? "VAD speaking" : "VAD idle"} - ${prob}`;
 }
 
 function updateAsrState(active, text) {
@@ -386,8 +418,16 @@ function updateTtsState(active, text) {
   ttsStateEl.textContent = text;
 }
 
-function enqueueAudio(mimeType, base64, latencyMs) {
-  state.audioQueue.push({ mimeType, base64, latencyMs });
+function enqueueAudio(payload) {
+  state.audioQueue.push({
+    mimeType: payload.mime_type,
+    base64: payload.data,
+    latencyMs: payload.latency_ms,
+    chunkIndex: payload.chunk_index,
+    byteLength: payload.byte_length,
+    textChars: payload.text_chars,
+    turnId: payload.turn_id,
+  });
   playAudioQueue();
 }
 
@@ -405,13 +445,16 @@ async function playAudioQueue() {
 
     while (state.audioQueue.length > 0) {
       const item = state.audioQueue.shift();
+      const decodeStarted = performance.now();
       const audioBuffer = await decodeAudioChunk(context, item);
+      const decodeMs = Math.round(performance.now() - decodeStarted);
       const source = context.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(context.destination);
 
       const now = context.currentTime;
-      const startAt = Math.max(now + 0.035, state.nextAudioTime);
+      const gapMs = Math.max(0, Math.round((state.nextAudioTime - now) * 1000));
+      const startAt = Math.max(now + state.playbackLeadTime, state.nextAudioTime);
       source.start(startAt);
       state.nextAudioTime = startAt + audioBuffer.duration;
       state.scheduledSources.push(source);
@@ -422,6 +465,10 @@ async function playAudioQueue() {
       if (!state.playbackStarted) {
         state.playbackStarted = true;
         setLatency("Playback start", item.latencyMs);
+      }
+      if (item.chunkIndex !== undefined) {
+        setLatency(`Decode ${item.chunkIndex}`, decodeMs);
+        setLatency(`Queue gap ${item.chunkIndex}`, gapMs);
       }
     }
   } catch (error) {
@@ -473,6 +520,22 @@ function stopAudio() {
   }
 }
 
+function resetPlaybackClock() {
+  if (state.playbackContext) {
+    state.nextAudioTime = state.playbackContext.currentTime;
+  }
+}
+
+function sendSystemPromptUpdate() {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  state.ws.send(JSON.stringify({
+    type: "system_prompt.update",
+    payload: { system_prompt: systemPromptInput.value },
+  }));
+}
+
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = textInput.value.trim();
@@ -481,7 +544,10 @@ composer.addEventListener("submit", (event) => {
   }
   latencyEl.innerHTML = "";
   state.playbackStarted = false;
-  state.ws.send(JSON.stringify({ type: "user.text", payload: { text } }));
+  state.ws.send(JSON.stringify({
+    type: "user.text",
+    payload: { text, system_prompt: systemPromptInput.value },
+  }));
   textInput.value = "";
 });
 
@@ -494,9 +560,33 @@ micButton.addEventListener("click", () => {
 });
 bargeButton.addEventListener("click", () => {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ type: "vad.speech_start", payload: {} }));
+    state.ws.send(JSON.stringify({
+      type: "vad.speech_start",
+      payload: { system_prompt: systemPromptInput.value },
+    }));
   }
 });
+stopAudioButton.addEventListener("click", () => {
+  stopAudio();
+  updateTtsState(false, "TTS stopped");
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: "tts.cancel", payload: {} }));
+  }
+});
+clearButton.addEventListener("click", () => {
+  stopAudio();
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: "conversation.clear", payload: {} }));
+  } else {
+    conversationEl.innerHTML = "";
+    latencyEl.innerHTML = "";
+  }
+});
+systemPromptInput.addEventListener("input", () => {
+  window.clearTimeout(systemPromptTimer);
+  systemPromptTimer = window.setTimeout(sendSystemPromptUpdate, 350);
+});
+systemPromptInput.addEventListener("change", sendSystemPromptUpdate);
 
 loadStatus().catch((error) => {
   profileEl.textContent = `Status failed: ${error.message}`;

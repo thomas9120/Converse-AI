@@ -1,4 +1,5 @@
 from conversational_harness.config import load_config
+from conversational_harness.main import profile_summary
 from conversational_harness.providers import build_providers
 
 
@@ -35,3 +36,16 @@ def test_kyutai_tts_profiles_build_server_provider():
         tts_status = next(item for item in providers.statuses() if item["kind"] == "tts")
 
         assert tts_status["name"] == "kyutai-tts-server"
+
+
+def test_profile_summary_includes_runtime_details():
+    config = load_config("profiles/llamacpp-local.json")
+    summary = profile_summary(config.raw)
+
+    llm = next(item for item in summary if item["kind"] == "llm")
+    asr = next(item for item in summary if item["kind"] == "asr")
+    tts = next(item for item in summary if item["kind"] == "tts")
+
+    assert llm["endpoint"] == "http://127.0.0.1:8080"
+    assert asr["model"] == "large-v3-turbo"
+    assert tts["voice"] == "azelma"

@@ -14,6 +14,8 @@ from conversational_harness.providers.factory import ProviderBundle
 class TurnState:
     messages: list[dict[str, str]] = field(default_factory=list)
     active_tts_tasks: set[asyncio.Task] = field(default_factory=set)
+    system_prompt: str = ""
+    turn_id: int = 0
 
 
 class ConversationOrchestrator:
@@ -30,6 +32,14 @@ class ConversationOrchestrator:
         self.min_tts_chars = min_tts_chars
         self.state = TurnState()
 
+    async def clear_conversation(self) -> None:
+        await self.cancel_tts("conversation_clear")
+        self.state.messages.clear()
+        await self.sink.emit("conversation.cleared")
+
+    def set_system_prompt(self, prompt: str) -> None:
+        self.state.system_prompt = prompt.strip()
+
     async def cancel_tts(self, reason: str) -> None:
         active = [task for task in self.state.active_tts_tasks if not task.done()]
         for task in active:
@@ -39,8 +49,9 @@ class ConversationOrchestrator:
 
     async def handle_text_turn(self, text: str) -> None:
         started = time.perf_counter()
+        turn_id = self._next_turn_id()
         await self.cancel_tts("new_user_turn")
-        await self.sink.emit("turn.started")
+        await self.sink.emit("turn.started", turn_id=turn_id)
         await self.sink.emit("vad.speech_start", source="text")
 
         final_transcript = ""
@@ -59,12 +70,13 @@ class ConversationOrchestrator:
             await self.sink.emit("turn.finished", reason="empty_transcript")
             return
 
-        await self._respond_to_transcript(final_transcript, started)
+        await self._respond_to_transcript(final_transcript, started, turn_id)
 
     async def handle_audio_turn(self, pcm_s16le: bytes, sample_rate: int) -> None:
         started = time.perf_counter()
+        turn_id = self._next_turn_id()
         await self.cancel_tts("new_audio_turn")
-        await self.sink.emit("turn.started", source="audio")
+        await self.sink.emit("turn.started", source="audio", turn_id=turn_id)
         await self.sink.emit("asr.started", sample_rate=sample_rate, bytes=len(pcm_s16le))
 
         final_transcript = ""
@@ -90,16 +102,16 @@ class ConversationOrchestrator:
             await self.sink.emit("turn.finished", reason="empty_transcript", latency_ms=elapsed_ms(started))
             return
 
-        await self._respond_to_transcript(final_transcript, started)
+        await self._respond_to_transcript(final_transcript, started, turn_id)
 
-    async def _respond_to_transcript(self, final_transcript: str, started: float) -> None:
+    async def _respond_to_transcript(self, final_transcript: str, started: float, turn_id: int) -> None:
         self.state.messages.append({"role": "user", "content": final_transcript})
         response_text = ""
         first_token_seen = False
         sentence_buffer = ""
 
         try:
-            async for token in self.providers.llm.stream_response(self.state.messages):
+            async for token in self.providers.llm.stream_response(self._llm_messages()):
                 if not first_token_seen:
                     first_token_seen = True
                     await self.sink.emit("llm.first_token", latency_ms=elapsed_ms(started))
@@ -108,32 +120,34 @@ class ConversationOrchestrator:
                 await self.sink.emit("llm.token", text=token, accumulated=response_text)
 
                 if should_flush_tts(sentence_buffer, self.tts_chunk_chars, self.min_tts_chars):
-                    await self._start_tts_chunk(sentence_buffer.strip(), started)
+                    await self._start_tts_chunk(sentence_buffer.strip(), started, turn_id)
                     sentence_buffer = ""
 
             if sentence_buffer.strip():
-                await self._start_tts_chunk(sentence_buffer.strip(), started)
+                await self._start_tts_chunk(sentence_buffer.strip(), started, turn_id)
 
             self.state.messages.append({"role": "assistant", "content": response_text.strip()})
             await self.sink.emit("turn.finished", latency_ms=elapsed_ms(started))
         except Exception as exc:
             await self.sink.emit("turn.error", message=str(exc), latency_ms=elapsed_ms(started))
 
-    async def _start_tts_chunk(self, text: str, turn_started: float) -> None:
-        task = asyncio.create_task(self._stream_tts(text, turn_started))
+    async def _start_tts_chunk(self, text: str, turn_started: float, turn_id: int) -> None:
+        task = asyncio.create_task(self._stream_tts(text, turn_started, turn_id))
         self.state.active_tts_tasks.add(task)
         task.add_done_callback(self.state.active_tts_tasks.discard)
 
-    async def _stream_tts(self, text: str, turn_started: float) -> None:
+    async def _stream_tts(self, text: str, turn_started: float, turn_id: int) -> None:
         first_chunk_seen = False
+        chunk_index = 0
         try:
             async def progress(event_type: str, payload: dict) -> None:
                 await self.sink.emit(event_type, **payload, latency_ms=elapsed_ms(turn_started))
 
             async for chunk in self.providers.tts.stream_audio_with_progress(text, progress):
+                chunk_index += 1
                 if not first_chunk_seen:
                     first_chunk_seen = True
-                    await self.sink.emit("tts.first_chunk", latency_ms=elapsed_ms(turn_started), text=text)
+                    await self.sink.emit("tts.first_chunk", latency_ms=elapsed_ms(turn_started), text=text, turn_id=turn_id)
                 encoded = base64.b64encode(chunk.data).decode("ascii")
                 await self.sink.emit(
                     "tts.audio",
@@ -141,12 +155,25 @@ class ConversationOrchestrator:
                     data=encoded,
                     final=chunk.final,
                     text=text,
+                    turn_id=turn_id,
+                    chunk_index=chunk_index,
+                    text_chars=len(text),
+                    byte_length=len(chunk.data),
                     latency_ms=elapsed_ms(turn_started),
                 )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             await self.sink.emit("tts.error", message=str(exc), latency_ms=elapsed_ms(turn_started), text=text)
+
+    def _llm_messages(self) -> list[dict[str, str]]:
+        if not self.state.system_prompt:
+            return list(self.state.messages)
+        return [{"role": "system", "content": self.state.system_prompt}, *self.state.messages]
+
+    def _next_turn_id(self) -> int:
+        self.state.turn_id += 1
+        return self.state.turn_id
 
 
 def elapsed_ms(started: float) -> int:
