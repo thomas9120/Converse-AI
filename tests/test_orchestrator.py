@@ -125,6 +125,24 @@ def test_system_prompt_is_prepended_to_llm_messages():
     assert messages[1] == {"role": "user", "content": "hello harness"}
 
 
+def test_no_system_prompt_is_sent_when_unset():
+    async def run_turn():
+        config = load_config("profiles/mock-local.json")
+        providers = build_providers(config)
+        llm = RecordingLLM()
+        providers.llm = llm
+        queue = asyncio.Queue()
+        orchestrator = ConversationOrchestrator(providers, QueueEventSink(queue), tts_chunk_chars=60)
+
+        await orchestrator.handle_text_turn("hello harness")
+        await asyncio.sleep(0.05)
+        return llm.messages[0]
+
+    messages = asyncio.run(run_turn())
+
+    assert messages == [{"role": "user", "content": "hello harness"}]
+
+
 def test_clear_conversation_removes_history():
     async def run_turn():
         config = load_config("profiles/mock-local.json")

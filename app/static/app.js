@@ -14,6 +14,8 @@ const state = {
   profileAudio: { sample_rate: 16000, channels: 1, frame_ms: 30 },
   ttsRuntime: null,
   ttsBusy: false,
+  pendingTtsPresetId: null,
+  pendingTtsVoiceId: null,
   mic: {
     active: false,
     stream: null,
@@ -47,6 +49,7 @@ const composer = document.querySelector("#composer");
 const textInput = document.querySelector("#text");
 const systemPromptInput = document.querySelector("#system-prompt");
 const ttsPresetEl = document.querySelector("#tts-preset");
+const ttsVoiceEl = document.querySelector("#tts-voice");
 const ttsLoadButton = document.querySelector("#tts-load");
 const ttsUnloadButton = document.querySelector("#tts-unload");
 const ttsRuntimeStateEl = document.querySelector("#tts-runtime-state");
@@ -63,6 +66,12 @@ async function loadStatus() {
 function applyStatus(status) {
   state.profileAudio = status.profile.audio || state.profileAudio;
   state.ttsRuntime = status.tts_runtime || null;
+  if (state.pendingTtsPresetId && status.tts_runtime?.selected_preset_id === state.pendingTtsPresetId) {
+    state.pendingTtsPresetId = null;
+  }
+  if (state.pendingTtsVoiceId && status.tts_runtime?.selected_voice === state.pendingTtsVoiceId) {
+    state.pendingTtsVoiceId = null;
+  }
   const override = status.tts_runtime?.selected_preset?.label;
   profileEl.textContent = override
     ? `${status.profile.name} - ${status.profile.description} - TTS override: ${override}`
@@ -115,13 +124,15 @@ function formatProviderDetails(details, provider = {}) {
 
 function renderTtsRuntime(runtime) {
   state.ttsRuntime = runtime || null;
+  const selectedPresetId = state.pendingTtsPresetId || runtime?.selected_preset_id;
+  const selectedVoiceId = state.pendingTtsVoiceId || runtime?.selected_voice;
   ttsPresetEl.innerHTML = "";
   const presets = runtime?.presets || [];
   for (const preset of presets) {
     const option = document.createElement("option");
     option.value = preset.id;
     option.textContent = preset.label;
-    if (preset.id === runtime?.selected_preset_id) {
+    if (preset.id === selectedPresetId) {
       option.selected = true;
     }
     ttsPresetEl.appendChild(option);
@@ -131,6 +142,24 @@ function renderTtsRuntime(runtime) {
     option.value = "";
     option.textContent = "No presets available";
     ttsPresetEl.appendChild(option);
+  }
+
+  ttsVoiceEl.innerHTML = "";
+  const voices = runtime?.available_voices || [];
+  for (const voice of voices) {
+    const option = document.createElement("option");
+    option.value = voice.id;
+    option.textContent = voice.label;
+    if (voice.id === selectedVoiceId) {
+      option.selected = true;
+    }
+    ttsVoiceEl.appendChild(option);
+  }
+  if (voices.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No voices available";
+    ttsVoiceEl.appendChild(option);
   }
 
   const status = runtime?.status;
@@ -153,12 +182,16 @@ function renderTtsRuntime(runtime) {
   }
   ttsRuntimeStateEl.dataset.mode = mode;
   ttsRuntimeStateEl.textContent = text;
-  ttsRuntimeSummaryEl.textContent = runtime?.selected_preset
-    ? `${runtime.selected_preset.label} - ${runtime.selected_preset.description}`
+  const selectedPreset = presets.find((preset) => preset.id === selectedPresetId) || runtime?.selected_preset;
+  const selectedVoice = voices.find((voice) => voice.id === selectedVoiceId);
+  ttsRuntimeSummaryEl.textContent = selectedPreset
+    ? `${selectedPreset.label} - ${selectedPreset.description}${selectedVoice ? ` - Voice: ${selectedVoice.label}` : ""}`
     : "";
 
   const supportsManagement = Boolean(status?.supports_model_management);
+  const supportsVoiceSelection = Boolean(status?.supports_voice_selection);
   ttsPresetEl.disabled = state.ttsBusy || presets.length === 0;
+  ttsVoiceEl.disabled = state.ttsBusy || !supportsVoiceSelection || voices.length === 0;
   ttsLoadButton.disabled = state.ttsBusy || !supportsManagement;
   ttsUnloadButton.disabled = state.ttsBusy || !supportsManagement;
 }
@@ -677,9 +710,13 @@ async function withTtsBusy(action) {
   renderTtsRuntime(state.ttsRuntime);
   try {
     const runtime = await action();
+    state.pendingTtsPresetId = null;
+    state.pendingTtsVoiceId = null;
     state.ttsRuntime = runtime;
     renderTtsRuntime(runtime);
   } catch (error) {
+    state.pendingTtsPresetId = null;
+    state.pendingTtsVoiceId = null;
     audioStatusEl.textContent = `TTS runtime error: ${error.message}`;
   } finally {
     state.ttsBusy = false;
@@ -746,7 +783,16 @@ ttsPresetEl.addEventListener("change", () => {
   if (!ttsPresetEl.value) {
     return;
   }
+  state.pendingTtsPresetId = ttsPresetEl.value;
+  state.pendingTtsVoiceId = null;
   withTtsBusy(() => postJson("/api/tts/select", { preset_id: ttsPresetEl.value }));
+});
+ttsVoiceEl.addEventListener("change", () => {
+  if (!ttsVoiceEl.value) {
+    return;
+  }
+  state.pendingTtsVoiceId = ttsVoiceEl.value;
+  withTtsBusy(() => postJson("/api/tts/voice", { voice_id: ttsVoiceEl.value }));
 });
 ttsLoadButton.addEventListener("click", () => {
   withTtsBusy(() => postJson("/api/tts/load"));

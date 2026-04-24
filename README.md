@@ -7,7 +7,7 @@ The first implementation is a runnable scaffold with clear provider boundaries:
 - VAD: Silero-oriented interface, mock implementation included.
 - ASR: faster-whisper voice path, Kyutai-oriented interface, mock implementation included.
 - LLM: llama.cpp OpenAI-compatible adapter, mock fallback included.
-- TTS: Pocket TTS voice output, Kyutai-oriented interface, mock tone fallback included.
+- TTS: Pocket TTS and Kokoro ONNX voice output, mock tone fallback included.
 - UI: local browser app for text turns, status, event stream, and latency metrics.
 
 The default start profile is `profiles/llamacpp-local.json`, which uses Silero VAD, faster-whisper ASR, llama.cpp, and Pocket TTS. A no-model smoke-test profile is still available at `profiles/mock-local.json`.
@@ -88,29 +88,17 @@ Pocket TTS loads the model and voice state on first use, then reuses them for la
 
 For smoother playback, the local profiles feed Pocket TTS larger phrase-sized chunks and the browser schedules decoded WAV chunks on a shared Web Audio timeline instead of playing each chunk as a separate audio element.
 
-### Kyutai TTS Server Profiles
+### Kokoro ONNX Profile
 
-Two experimental profiles are included for testing larger Kyutai TTS models through a local HTTP wrapper:
+An additional profile is included for Kokoro v1.0 ONNX on CPU:
 
 ```powershell
-$env:HARNESS_PROFILE="profiles/llamacpp-kyutai-tts-0.75b.json"
+$env:HARNESS_PROFILE="profiles/llamacpp-kokoro-onnx.json"
 .\doctor.ps1
 .\start.ps1
 ```
 
-```powershell
-$env:HARNESS_PROFILE="profiles/llamacpp-kyutai-tts-1.6b.json"
-.\doctor.ps1
-.\start.ps1
-```
-
-These profiles expect a local service at `http://127.0.0.1:8998` with:
-
-- `GET /health` for readiness.
-- `POST /tts` with JSON `{ "text": "...", "model": "...", "voice": "..." }`.
-- An `audio/*` response body, or JSON with `audio_base64` and optional `mime_type`.
-
-This is intentionally a wrapper boundary, not a hard dependency on one Kyutai runtime. The official Kyutai Rust server uses websockets; the HTTP adapter gives the harness a stable provider seam while we decide whether to wrap the Rust server, use the 0.75B model, test 1.6B directly, or experiment with the community GGUF conversion.
+Kokoro uses local ONNX files and downloads the current v1.0 assets on first use into `model-cache/kokoro`. The runtime TTS selector in the web UI can switch between Pocket TTS and Kokoro without restarting the harness, and both engines now expose curated voice choices in the UI.
 
 Latency metrics now include ASR final, LLM first token, TTS first chunk, playback start, and turn complete where those stages are available.
 

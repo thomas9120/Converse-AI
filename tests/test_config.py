@@ -27,16 +27,12 @@ def test_mock_profile_async_statuses_are_ready():
     assert all(item["ready"] for item in statuses)
 
 
-def test_kyutai_tts_profiles_build_server_provider():
-    for profile in (
-        "profiles/llamacpp-kyutai-tts-0.75b.json",
-        "profiles/llamacpp-kyutai-tts-1.6b.json",
-    ):
-        config = load_config(profile)
-        providers = build_providers(config)
-        tts_status = next(item for item in providers.statuses() if item["kind"] == "tts")
+def test_kokoro_profile_builds_provider():
+    config = load_config("profiles/llamacpp-kokoro-onnx.json")
+    providers = build_providers(config)
+    tts_status = next(item for item in providers.statuses() if item["kind"] == "tts")
 
-        assert tts_status["name"] == "kyutai-tts-server"
+    assert tts_status["name"] == "kokoro-onnx"
 
 
 def test_profile_summary_includes_runtime_details():
@@ -56,5 +52,5 @@ def test_tts_presets_load_and_match_default_profile():
     config = load_config("profiles/llamacpp-local.json")
     runtime = TTSRuntimeManager(config, load_tts_presets())
 
-    assert runtime.selected_preset.id == "pocket-azelma"
-    assert len(runtime.presets) >= 3
+    assert runtime.selected_preset.id == "pocket-tts"
+    assert len(runtime.presets) >= 2

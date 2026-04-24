@@ -1,6 +1,7 @@
 fastapi==0.115.6
 faster-whisper==1.2.1
 httpx==0.28.1
+kokoro-onnx==0.5.0
 numpy==2.2.1
 onnxruntime==1.23.2
 pocket-tts==2.0.0

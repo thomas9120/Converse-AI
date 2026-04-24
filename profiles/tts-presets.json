@@ -1,9 +1,9 @@
 {
   "presets": [
     {
-      "id": "pocket-azelma",
+      "id": "pocket-tts",
       "label": "Pocket TTS",
-      "description": "Pocket TTS on CPU using the azelma voice.",
+      "description": "Pocket TTS on CPU with low-latency streaming playback.",
       "provider": "pocket-tts",
       "tts": {
         "provider": "pocket-tts",
@@ -19,49 +19,64 @@
       },
       "management": {
         "mode": "in_process"
-      }
+      },
+      "voices": [
+        { "id": "alba", "label": "Alba" },
+        { "id": "anna", "label": "Anna" },
+        { "id": "azelma", "label": "Azelma" },
+        { "id": "bill_boerst", "label": "Bill Boerst" },
+        { "id": "caro_davy", "label": "Caro Davy" },
+        { "id": "charles", "label": "Charles" },
+        { "id": "cosette", "label": "Cosette" },
+        { "id": "eponine", "label": "Eponine" },
+        { "id": "eve", "label": "Eve" },
+        { "id": "fantine", "label": "Fantine" },
+        { "id": "george", "label": "George" },
+        { "id": "jane", "label": "Jane" },
+        { "id": "jean", "label": "Jean" },
+        { "id": "javert", "label": "Javert" },
+        { "id": "marius", "label": "Marius" },
+        { "id": "mary", "label": "Mary" },
+        { "id": "michael", "label": "Michael" },
+        { "id": "paul", "label": "Paul" },
+        { "id": "peter_yearsley", "label": "Peter Yearsley" },
+        { "id": "stuart_bell", "label": "Stuart Bell" },
+        { "id": "vera", "label": "Vera" }
+      ]
     },
     {
-      "id": "kyutai-0.75b",
-      "label": "Kyutai 0.75B",
-      "description": "Kyutai 0.75B through the local HTTP wrapper.",
-      "provider": "kyutai-tts-server",
+      "id": "kokoro-v1",
+      "label": "Kokoro v1.0",
+      "description": "Kokoro ONNX on CPU with curated English voices.",
+      "provider": "kokoro-onnx",
       "tts": {
-        "provider": "kyutai-tts-server",
-        "base_url": "http://127.0.0.1:8998",
-        "health_path": "/health",
-        "synthesize_path": "/tts",
-        "model": "kyutai/tts-0.75b-en-public",
-        "voice": "default",
-        "timeout_s": 180
+        "provider": "kokoro-onnx",
+        "voice": "af_heart",
+        "lang": "en-us",
+        "speed": 1.0,
+        "trim": true,
+        "cache_dir": "model-cache/kokoro",
+        "model_filename": "kokoro-v1.0.int8.onnx",
+        "voices_filename": "voices-v1.0.bin",
+        "model_url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx",
+        "voices_url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
+        "timeout_s": 300
       },
       "turn": {
-        "tts_chunk_chars": 260
+        "tts_chunk_chars": 260,
+        "min_tts_chars": 110
       },
       "management": {
-        "mode": "external"
-      }
-    },
-    {
-      "id": "kyutai-1.6b",
-      "label": "Kyutai 1.6B",
-      "description": "Kyutai 1.6B through the local HTTP wrapper.",
-      "provider": "kyutai-tts-server",
-      "tts": {
-        "provider": "kyutai-tts-server",
-        "base_url": "http://127.0.0.1:8998",
-        "health_path": "/health",
-        "synthesize_path": "/tts",
-        "model": "kyutai/tts-1.6b-en_fr",
-        "voice": "default",
-        "timeout_s": 180
+        "mode": "in_process"
       },
-      "turn": {
-        "tts_chunk_chars": 260
-      },
-      "management": {
-        "mode": "external"
-      }
+      "voices": [
+        { "id": "af_heart", "label": "American - Heart" },
+        { "id": "af_bella", "label": "American - Bella" },
+        { "id": "af_nicole", "label": "American - Nicole" },
+        { "id": "am_michael", "label": "American - Michael" },
+        { "id": "bf_emma", "label": "British - Emma" },
+        { "id": "bm_george", "label": "British - George" }
+      ]
     }
   ]
 }

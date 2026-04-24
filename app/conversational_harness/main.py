@@ -71,6 +71,21 @@ async def unload_tts_model() -> dict[str, Any]:
     return runtime
 
 
+@app.post("/api/tts/voice")
+async def select_tts_voice(payload: dict[str, Any]) -> dict[str, Any]:
+    voice_id = str(payload.get("voice_id", "")).strip()
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="voice_id is required")
+    await cancel_active_tts("tts_voice_select")
+    try:
+        runtime = await TTS_MANAGER.select_voice(voice_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await refresh_turn_config()
+    await broadcast_providers_status()
+    return runtime
+
+
 def profile_summary(raw: dict[str, Any]) -> list[dict[str, Any]]:
     summary = []
     for kind in ("vad", "asr", "llm", "tts"):

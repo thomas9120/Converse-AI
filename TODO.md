@@ -41,50 +41,53 @@ Keep future work modular: each VAD, ASR, LLM, and TTS backend should stay behind
   - Pocket TTS provider implemented.
   - Default Pocket TTS voice is `azelma`.
   - TTS audio streams through `tts.audio` events.
-  - Browser playback uses scheduled Web Audio decoding instead of one `Audio()` element per chunk.
+  - Browser playback now uses scheduled Web Audio playback with direct PCM buffer construction.
   - TTS text chunking now uses larger phrase-sized chunks with `tts_chunk_chars` and `min_tts_chars`.
-- Kyutai TTS scaffolding.
-  - `kyutai-tts-server` provider added as a local HTTP wrapper boundary.
-  - Profiles added for `kyutai/tts-0.75b-en-public` and `kyutai/tts-1.6b-en_fr`.
-  - Kyutai TTS is not required for app startup.
+  - Pocket TTS playback regression was fixed by coalescing tiny model chunks on the backend, sending raw `pcm_s16le` with explicit metadata, and avoiding per-fragment WAV decode in the browser.
+- Runtime TTS switching now targets local CPU engines.
+  - Pocket TTS remains the default low-latency path.
+  - Kokoro v1.0 ONNX is now the second runtime-selectable TTS option.
+  - Runtime voice selection is exposed in the web UI for both Pocket and Kokoro presets.
 - UI.
   - Local web UI shows profile, provider status, mic controls, input level, VAD/ASR/TTS state, transcript, response stream, events, and latency.
   - Latency metrics include ASR final, LLM first token, TTS first chunk, playback start, and turn complete.
+  - System prompt editor, dark mode, conversation clear, and stop-audio controls are in place.
+  - Runtime TTS preset selection plus generic load/unload controls are in place.
 - Tests.
-  - Current suite passes: `24 passed, 1 skipped`.
+  - Current suite passes: `33 passed, 1 skipped`.
   - Tests cover audio helpers, audio frames, config/provider building, doctor checks, orchestrator events, faster-whisper provider behavior, Pocket TTS behavior, Silero VAD behavior, and optional llama.cpp live integration.
+  - Runtime TTS manager and preset switching are covered by tests.
 
 ## Current Priority
 
-1. Stabilize Pocket TTS playback quality.
-   - Test whether the Web Audio scheduling and larger phrase chunks reduce choppiness enough for regular use.
-   - If choppiness remains, identify whether seams come from Pocket generation chunks, WAV chunk boundaries, browser scheduling, or overly small LLM-to-TTS text chunks.
-   - Try PCM streaming instead of per-chunk WAV decode if browser scheduling is not enough.
-   - Consider short overlap/crossfade only if seams are playback-bound rather than generation-bound.
+1. Validate and polish Kokoro ONNX as the second CPU TTS engine.
+   - Verify first-run model download behavior and error messaging.
+   - Compare Kokoro and Pocket for first-audio latency, quality, and long-form chunking.
+   - Expand the curated English voice list only after a listening pass.
 
-2. Add conversation controls to the UI.
-   - Clear/reset current conversation.
-   - Save transcript to local text/JSON.
-   - Show active profile name and provider details more explicitly.
-   - Add a visible system prompt editor if not already present in the active UI copy.
-
-3. Improve runtime/doctor diagnostics.
+2. Improve runtime/doctor diagnostics.
    - Report which process owns port `7860`, not just whether the port is occupied.
    - Add doctor checks for microphone/browser constraints where possible.
    - Add clearer Pocket TTS Hugging Face gate/token messages.
-   - Add a profile summary showing active model names, devices, compute types, and endpoints.
+   - Add a profile summary showing active model names, devices, compute types, endpoints, and selected TTS runtime preset.
+
+3. Expand TTS runtime polish.
+   - Save transcript to local text/JSON.
+   - Surface provider-specific runtime notes without breaking the generic UI contract.
+   - Investigate Pocket TTS text normalization quirks such as missing contractions, treating them as model behavior unless transport evidence appears.
 
 ## Next Implementation Tracks
 
-### Kyutai TTS
+### TTS Engines
 
-- Build or choose the local HTTP wrapper behind `kyutai-tts-server`.
-  - First target: `kyutai/tts-0.75b-en-public` for a lower-VRAM quality comparison.
-  - Second target: `kyutai/tts-1.6b-en_fr` through the official Rust server path.
-  - Experimental target: community GGUF/moshi.cpp conversion if it exposes a stable local server path.
-- Replace the temporary HTTP wrapper adapter with a native websocket adapter if the official Kyutai server protocol is stable enough.
-- Record VRAM use, first-audio latency, playback latency, and perceived quality for Pocket TTS, 0.75B, 1.6B, and GGUF experiments.
-- Keep Pocket TTS as the CPU fallback even if Kyutai TTS becomes the preferred quality path.
+- Keep Pocket TTS and Kokoro ONNX as the active local TTS choices.
+- Track side-by-side notes for:
+  - first-audio latency,
+  - playback smoothness,
+  - voice quality,
+  - interruption behavior,
+  - long response chunking.
+- Keep the runtime TTS preset switcher generic so future engines can still slot in through a provider adapter plus preset metadata.
 
 ### Kyutai STT
 
@@ -142,6 +145,7 @@ Keep future work modular: each VAD, ASR, LLM, and TTS backend should stay behind
 ### Packaging And Usability
 
 - Add a one-command launcher that runs `doctor` first and opens the browser only when core dependencies are ready.
+- Keep the runtime TTS preset switcher generic so future engines only need a provider adapter plus preset entries.
 - Add a profile selector or explicit startup prompt so users do not accidentally run the wrong stack.
 - Keep Windows first-class, but maintain simple shell equivalents for Linux/macOS.
 - Document model downloads, Hugging Face gates, CUDA caveats, and expected first-run delays in a troubleshooting section.

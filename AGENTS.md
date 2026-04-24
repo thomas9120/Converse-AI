@@ -5,7 +5,7 @@ This project is intended to become a local, modular conversational AI harness fo
 - VAD: Silero VAD, preferably ONNX on CPU.
 - ASR: Kyutai STT first, with Whisper/faster-whisper style fallbacks.
 - LLM: llama.cpp server first, with CUDA default and Vulkan treated as experimental.
-- TTS: Kyutai TTS 1.6B first, with Kyutai Pocket TTS as the CPU fallback.
+- TTS: Pocket TTS and Kokoro ONNX as the primary local CPU options.
 - UI: local desktop/web app launched by plain scripts.
 
 ## Design Mistakes To Avoid
@@ -44,7 +44,7 @@ This project is intended to become a local, modular conversational AI harness fo
 ## Modularity Guidelines
 
 - Define provider contracts before adding model-specific glue.
-- Keep experimental service adapters thin. For Kyutai TTS/STT, prefer a narrow local server boundary first, then replace it with a native websocket or runtime-specific adapter only after the protocol and runtime behavior are proven.
+- Keep experimental adapters thin. Prefer in-process or simple local runtime boundaries that keep TTS swappable without forcing the harness around one engine.
 - Prefer event streams over blocking calls for realtime paths.
 - Keep audio format conversions explicit: sample rate, channel count, frame size, PCM type.
 - Make every provider report capabilities such as `supports_partials`, `supports_streaming_tts`, `supports_barge_in`, `requires_gpu`, and `languages`.

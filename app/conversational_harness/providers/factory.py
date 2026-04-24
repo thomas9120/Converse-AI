@@ -6,7 +6,7 @@ from typing import Callable
 from conversational_harness.config import HarnessConfig
 from conversational_harness.providers.base import ASRProvider, LLMProvider, ProviderStatus, TTSProvider, VADProvider
 from conversational_harness.providers.faster_whisper import FasterWhisperASRProvider
-from conversational_harness.providers.kyutai_tts_server import KyutaiTTSServerProvider
+from conversational_harness.providers.kokoro_onnx import KokoroOnnxProvider
 from conversational_harness.providers.llamacpp import LlamaCppProvider
 from conversational_harness.providers.mock import MockASRProvider, MockLLMProvider, MockTTSProvider, MockVADProvider
 from conversational_harness.providers.pocket_tts import PocketTTSProvider
@@ -94,8 +94,7 @@ def build_llm(config: dict) -> LLMProvider:
 
 TTS_PROVIDER_BUILDERS: dict[str, Callable[[dict], TTSProvider]] = {
     "mock": MockTTSProvider,
-    "kyutai": KyutaiTTSServerProvider,
-    "kyutai-tts-server": KyutaiTTSServerProvider,
+    "kokoro-onnx": KokoroOnnxProvider,
     "pocket-tts": PocketTTSProvider,
 }
 

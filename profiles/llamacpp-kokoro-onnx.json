@@ -1,6 +1,6 @@
 {
-  "name": "llamacpp-kyutai-tts-0.75b",
-  "description": "Local llama.cpp server with Silero VAD, faster-whisper ASR, and an external Kyutai TTS 0.75B HTTP wrapper.",
+  "name": "llamacpp-kokoro-onnx",
+  "description": "Local llama.cpp server with Silero VAD, faster-whisper ASR, and Kokoro v1.0 ONNX TTS.",
   "audio": {
     "sample_rate": 16000,
     "channels": 1,
@@ -32,16 +32,21 @@
     "max_tokens": 256
   },
   "tts": {
-    "provider": "kyutai-tts-server",
-    "base_url": "http://127.0.0.1:8998",
-    "health_path": "/health",
-    "synthesize_path": "/tts",
-    "model": "kyutai/tts-0.75b-en-public",
-    "voice": "default",
-    "timeout_s": 180
+    "provider": "kokoro-onnx",
+    "voice": "af_heart",
+    "lang": "en-us",
+    "speed": 1.0,
+    "trim": true,
+    "cache_dir": "model-cache/kokoro",
+    "model_filename": "kokoro-v1.0.int8.onnx",
+    "voices_filename": "voices-v1.0.bin",
+    "model_url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx",
+    "voices_url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
+    "timeout_s": 300
   },
   "turn": {
     "barge_in": "cancel_tts",
-    "tts_chunk_chars": 260
+    "tts_chunk_chars": 260,
+    "min_tts_chars": 110
   }
 }

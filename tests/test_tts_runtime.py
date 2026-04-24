@@ -9,13 +9,13 @@ def test_tts_runtime_switches_only_tts_provider():
         config = load_config("profiles/llamacpp-local.json")
         runtime = TTSRuntimeManager(config, load_tts_presets())
         before = runtime.current_turn_config()
-        result = await runtime.select_preset("kyutai-0.75b")
+        result = await runtime.select_preset("kokoro-v1")
         after = runtime.current_turn_config()
         return result, before, after
 
     result, before, after = asyncio.run(run())
 
-    assert result["selected_preset_id"] == "kyutai-0.75b"
+    assert result["selected_preset_id"] == "kokoro-v1"
     assert result["status"]["kind"] == "tts"
     assert before["barge_in"] == after["barge_in"]
 
@@ -34,13 +34,27 @@ def test_tts_runtime_unload_marks_provider_unloaded():
     assert not result["status"]["loaded"]
 
 
-def test_external_tts_preset_reports_unmanaged_controls():
+def test_kokoro_preset_reports_managed_controls():
     async def run():
         config = load_config("profiles/llamacpp-local.json")
         runtime = TTSRuntimeManager(config, load_tts_presets())
-        return await runtime.select_preset("kyutai-1.6b")
+        return await runtime.select_preset("kokoro-v1")
 
     result = asyncio.run(run())
 
-    assert result["status"]["managed_externally"]
-    assert not result["status"]["supports_model_management"]
+    assert not result["status"]["managed_externally"]
+    assert result["status"]["supports_model_management"]
+
+
+def test_tts_runtime_switches_voice_within_selected_preset():
+    async def run():
+        config = load_config("profiles/llamacpp-local.json")
+        runtime = TTSRuntimeManager(config, load_tts_presets())
+        await runtime.select_preset("kokoro-v1")
+        result = await runtime.select_voice("bf_emma")
+        return result, runtime.merged_profile_raw()
+
+    result, merged = asyncio.run(run())
+
+    assert result["selected_voice"] == "bf_emma"
+    assert merged["tts"]["voice"] == "bf_emma"
