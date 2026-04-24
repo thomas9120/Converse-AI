@@ -7,13 +7,17 @@
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
-    <main class="shell">
+    <main class="shell" data-view="chat">
       <section class="topbar">
         <div>
           <h1>Conversational AI Harness</h1>
           <p id="profile">Loading profile...</p>
         </div>
         <div class="controls">
+          <nav class="tab-nav">
+            <button id="tab-chat" class="tab active" type="button">Chat</button>
+            <button id="tab-settings" class="tab" type="button">Settings</button>
+          </nav>
           <button id="theme-toggle" type="button">Dark Mode</button>
           <button id="mic" type="button" disabled>Start Mic</button>
           <button id="connect" type="button">Connect</button>
@@ -61,20 +65,103 @@
         <span id="audio-status">Audio idle</span>
       </section>
 
-      <section class="workspace">
-        <section class="conversation" id="conversation" aria-live="polite"></section>
-        <aside class="side">
-          <h2>Latency</h2>
-          <dl id="latency"></dl>
-          <h2>Events</h2>
-          <ol id="events"></ol>
-        </aside>
+      <section class="view-chat">
+        <section class="workspace">
+          <section class="conversation" id="conversation" aria-live="polite"></section>
+          <aside class="side">
+            <h2>Latency</h2>
+            <dl id="latency"></dl>
+            <h2>Events</h2>
+            <ol id="events"></ol>
+          </aside>
+        </section>
+
+        <form class="composer" id="composer">
+          <input id="text" autocomplete="off" placeholder="Type a test utterance while the audio path is being wired..." aria-label="Utterance">
+          <button id="continue-btn" type="button" disabled>Continue</button>
+          <button id="send" type="submit" disabled>Send</button>
+        </form>
       </section>
 
-      <form class="composer" id="composer">
-        <input id="text" autocomplete="off" placeholder="Type a test utterance while the audio path is being wired..." aria-label="Utterance">
-        <button id="send" type="submit" disabled>Send</button>
-      </form>
+      <section class="view-settings">
+        <div class="settings-grid">
+          <article class="settings-card">
+            <h2>Names</h2>
+            <div class="settings-row">
+              <label for="user-name">Your name</label>
+              <input id="user-name" type="text" placeholder="You" autocomplete="off">
+            </div>
+            <div class="settings-row">
+              <label for="ai-name">AI name</label>
+              <input id="ai-name" type="text" placeholder="Assistant" autocomplete="off">
+            </div>
+            <p class="settings-hint">Names are used in chat display and injected into the system prompt.</p>
+          </article>
+
+          <article class="settings-card">
+            <h2>Sampler Settings</h2>
+            <div class="settings-row">
+              <label for="sampler-temperature">Temperature</label>
+              <input id="sampler-temperature" type="number" step="0.05" min="0" max="2">
+            </div>
+            <div class="settings-row">
+              <label for="sampler-top-k">Top K</label>
+              <input id="sampler-top-k" type="number" step="1" min="0">
+            </div>
+            <div class="settings-row">
+              <label for="sampler-top-p">Top P</label>
+              <input id="sampler-top-p" type="number" step="0.05" min="0" max="1">
+            </div>
+            <div class="settings-row">
+              <label for="sampler-min-p">Min P</label>
+              <input id="sampler-min-p" type="number" step="0.05" min="0" max="1">
+            </div>
+            <div class="settings-row">
+              <label for="sampler-repeat-penalty">Repeat Penalty</label>
+              <input id="sampler-repeat-penalty" type="number" step="0.05" min="1" max="2">
+            </div>
+            <div class="settings-row">
+              <label for="sampler-frequency-penalty">Frequency Penalty</label>
+              <input id="sampler-frequency-penalty" type="number" step="0.05" min="0" max="2">
+            </div>
+            <div class="settings-row">
+              <label for="sampler-presence-penalty">Presence Penalty</label>
+              <input id="sampler-presence-penalty" type="number" step="0.05" min="0" max="2">
+            </div>
+            <div class="settings-row">
+              <label for="sampler-max-tokens">Max Tokens</label>
+              <input id="sampler-max-tokens" type="number" step="1" min="1">
+            </div>
+            <div class="settings-actions">
+              <button id="sampler-reset" type="button">Reset to Defaults</button>
+            </div>
+            <p class="settings-hint">Changes apply to the next LLM request. Settings persist across restarts.</p>
+          </article>
+
+          <article class="settings-card">
+            <h2>Character Card</h2>
+            <div class="character-drop" id="character-drop">
+              <p>Drop a <strong>.png</strong> or <strong>.json</strong> character card here, or click to browse</p>
+              <input id="character-file" type="file" accept=".png,.json" hidden>
+            </div>
+            <div id="character-info" class="character-info hidden">
+              <div class="character-header">
+                <h3 id="character-name"></h3>
+                <button id="character-clear" type="button">Clear Card</button>
+              </div>
+              <p id="character-description"></p>
+              <details id="character-details">
+                <summary>Full card details</summary>
+                <div id="character-full"></div>
+              </details>
+            </div>
+            <div class="settings-row">
+              <label for="additional-system-prompt">Additional instructions</label>
+              <textarea id="additional-system-prompt" rows="3" placeholder="Extra instructions appended after the character card or names."></textarea>
+            </div>
+          </article>
+        </div>
+      </section>
     </main>
 
     <script src="/static/app.js"></script>

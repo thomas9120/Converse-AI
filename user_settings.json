@@ -1,0 +1,20 @@
+{
+  "llm_overrides": {
+    "temperature": 1,
+    "top_k": null,
+    "top_p": null,
+    "min_p": 0.05,
+    "repeat_penalty": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "max_tokens": 184
+  },
+  "user_name": "Thomas",
+  "ai_name": "Alia",
+  "additional_system_prompt": "",
+  "sampler_display": {
+    "temperature": 1,
+    "min_p": 0.05,
+    "max_tokens": 184
+  }
+}

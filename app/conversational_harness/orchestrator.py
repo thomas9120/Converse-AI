@@ -4,10 +4,13 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from conversational_harness.events import EventSink
 from conversational_harness.providers.factory import ProviderBundle
+
+if TYPE_CHECKING:
+    from conversational_harness.runtime_settings import RuntimeSettings
 
 
 @dataclass
@@ -26,12 +29,14 @@ class ConversationOrchestrator:
         sink: EventSink,
         tts_chunk_chars: int = 120,
         min_tts_chars: int = 0,
+        runtime_settings: RuntimeSettings | None = None,
     ):
         self.providers = providers
         self.sink = sink
         self.tts_chunk_chars = tts_chunk_chars
         self.min_tts_chars = min_tts_chars
         self.state = TurnState()
+        self._runtime_settings = runtime_settings
 
     def update_turn_config(self, *, tts_chunk_chars: int, min_tts_chars: int) -> None:
         self.tts_chunk_chars = tts_chunk_chars
@@ -109,6 +114,42 @@ class ConversationOrchestrator:
             return
 
         await self._respond_to_transcript(final_transcript, started, turn_id)
+
+    async def handle_continue(self) -> None:
+        if not self.state.messages or self.state.messages[-1]["role"] != "assistant":
+            await self.sink.emit("turn.error", message="No previous assistant message to continue.")
+            return
+        started = time.perf_counter()
+        turn_id = self._next_turn_id()
+        await self.cancel_tts("continue_turn")
+        await self.sink.emit("turn.started", source="continue", turn_id=turn_id)
+        prefix = self.state.messages[-1]["content"]
+        self.state.messages.pop()
+        self.state.messages.append({"role": "assistant", "content": prefix})
+        response_text = prefix
+        first_token_seen = False
+        sentence_buffer = ""
+
+        try:
+            async for token in self.providers.llm.stream_response(self._llm_messages()):
+                if not first_token_seen:
+                    first_token_seen = True
+                    await self.sink.emit("llm.first_token", latency_ms=elapsed_ms(started))
+                response_text += token
+                sentence_buffer += token
+                await self.sink.emit("llm.token", text=token, accumulated=response_text)
+
+                if should_flush_tts(sentence_buffer, self.tts_chunk_chars, self.min_tts_chars):
+                    await self._start_tts_chunk(sentence_buffer.strip(), started, turn_id)
+                    sentence_buffer = ""
+
+            if sentence_buffer.strip():
+                await self._start_tts_chunk(sentence_buffer.strip(), started, turn_id)
+
+            self.state.messages[-1] = {"role": "assistant", "content": response_text.strip()}
+            await self.sink.emit("turn.finished", latency_ms=elapsed_ms(started))
+        except Exception as exc:
+            await self.sink.emit("turn.error", message=str(exc), latency_ms=elapsed_ms(started))
 
     async def _respond_to_transcript(self, final_transcript: str, started: float, turn_id: int) -> None:
         self.state.messages.append({"role": "user", "content": final_transcript})
@@ -193,9 +234,17 @@ class ConversationOrchestrator:
             await self.sink.emit("tts.error", message=str(exc), latency_ms=elapsed_ms(turn_started), text=text)
 
     def _llm_messages(self) -> list[dict[str, str]]:
-        if not self.state.system_prompt:
+        prompt = self._effective_system_prompt()
+        if not prompt:
             return list(self.state.messages)
-        return [{"role": "system", "content": self.state.system_prompt}, *self.state.messages]
+        return [{"role": "system", "content": prompt}, *self.state.messages]
+
+    def _effective_system_prompt(self) -> str:
+        if self._runtime_settings is not None:
+            return self._runtime_settings.effective_system_prompt(self.state.system_prompt)
+        if self.state.system_prompt:
+            return self.state.system_prompt
+        return ""
 
     def _next_turn_id(self) -> int:
         self.state.turn_id += 1

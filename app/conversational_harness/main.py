@@ -15,6 +15,13 @@ from conversational_harness.audio_frames import AudioFrameStats, parse_audio_fra
 from conversational_harness.config import PROJECT_ROOT, load_config
 from conversational_harness.orchestrator import ConversationOrchestrator, QueueEventSink
 from conversational_harness.providers.factory import build_provider_bundle, serialize_statuses
+from conversational_harness.runtime_settings import (
+    RuntimeSettings,
+    load_runtime_settings,
+    parse_character_json,
+    parse_character_png,
+    save_runtime_settings,
+)
 from conversational_harness.tts_runtime import TTSRuntimeManager, load_tts_presets
 
 logger = logging.getLogger(__name__)
@@ -30,6 +37,7 @@ TURN_CONFIG_HOOKS: set[Any] = set()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await _fetch_llm_server_defaults()
     yield
     logger.info("Shutting down: cleaning up providers and active connections.")
     await cancel_active_tts("shutdown")
@@ -49,9 +57,25 @@ app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 
 BASE_CONFIG = load_config()
 TTS_MANAGER = TTSRuntimeManager(BASE_CONFIG, load_tts_presets())
+RUNTIME_SETTINGS = load_runtime_settings(BASE_CONFIG.section("llm"))
 ACTIVE_QUEUES: set[asyncio.Queue[dict[str, Any]]] = set()
 TTS_CANCEL_HOOKS: set[Any] = set()
 TURN_CONFIG_HOOKS: set[Any] = set()
+
+
+async def _fetch_llm_server_defaults() -> None:
+    llm_config = BASE_CONFIG.section("llm")
+    base_url = str(llm_config.get("base_url", "http://127.0.0.1:8080")).rstrip("/")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=1.0, read=3.0)) as client:
+            resp = await client.get(f"{base_url}/props")
+            resp.raise_for_status()
+            params = resp.json().get("default_generation_settings", {}).get("params", {})
+            RUNTIME_SETTINGS.set_server_defaults(params)
+            logger.info("Fetched llama.cpp server defaults: %s", list(RUNTIME_SETTINGS.server_defaults.keys()))
+    except Exception as exc:
+        logger.info("Could not fetch llama.cpp server defaults: %s", exc)
 
 
 @app.get("/")
@@ -110,6 +134,63 @@ async def select_tts_voice(payload: dict[str, Any]) -> dict[str, Any]:
     await refresh_turn_config()
     await broadcast_providers_status()
     return runtime
+
+
+@app.get("/api/settings")
+async def get_settings() -> dict[str, Any]:
+    return RUNTIME_SETTINGS.to_dict()
+
+
+@app.patch("/api/settings")
+async def patch_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    RUNTIME_SETTINGS.apply_patch(payload)
+    save_runtime_settings(RUNTIME_SETTINGS)
+    await broadcast_settings()
+    return RUNTIME_SETTINGS.to_dict()
+
+
+@app.post("/api/settings/character")
+async def import_character(payload: dict[str, Any]) -> dict[str, Any]:
+    char_data = payload.get("character")
+    if not char_data or not isinstance(char_data, dict):
+        raise HTTPException(status_code=400, detail="character object is required")
+    card = parse_character_json(json.dumps(char_data))
+    if not card.name:
+        raise HTTPException(status_code=400, detail="Character card must have a name")
+    RUNTIME_SETTINGS.set_character(card)
+    save_runtime_settings(RUNTIME_SETTINGS)
+    await broadcast_settings()
+    return RUNTIME_SETTINGS.to_dict()
+
+
+@app.post("/api/settings/character/upload")
+async def upload_character(payload: dict[str, Any]) -> dict[str, Any]:
+    file_data = payload.get("data")
+    filename = str(payload.get("filename", "")).lower()
+    if not file_data:
+        raise HTTPException(status_code=400, detail="file data is required")
+    import base64 as b64
+    raw = b64.b64decode(file_data)
+    if filename.endswith(".png"):
+        card = parse_character_png(raw)
+    elif filename.endswith(".json"):
+        card = parse_character_json(raw.decode("utf-8"))
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported file type. Use .png or .json")
+    if not card.name:
+        raise HTTPException(status_code=400, detail="Character card must have a name")
+    RUNTIME_SETTINGS.set_character(card)
+    save_runtime_settings(RUNTIME_SETTINGS)
+    await broadcast_settings()
+    return RUNTIME_SETTINGS.to_dict()
+
+
+@app.delete("/api/settings/character")
+async def delete_character() -> dict[str, Any]:
+    RUNTIME_SETTINGS.clear_character()
+    save_runtime_settings(RUNTIME_SETTINGS)
+    await broadcast_settings()
+    return RUNTIME_SETTINGS.to_dict()
 
 
 def profile_summary(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -174,6 +255,7 @@ async def status_payload() -> dict[str, Any]:
         },
         "providers": await provider_statuses_payload(),
         "tts_runtime": await TTS_MANAGER.describe(),
+        "settings": RUNTIME_SETTINGS.to_dict(),
     }
 
 
@@ -194,6 +276,10 @@ async def broadcast_providers_status() -> None:
     await broadcast(await providers_status_event())
 
 
+async def broadcast_settings() -> None:
+    await broadcast({"type": "settings.updated", "payload": RUNTIME_SETTINGS.to_dict()})
+
+
 async def cancel_active_tts(reason: str) -> None:
     for hook in list(TTS_CANCEL_HOOKS):
         await hook(reason)
@@ -209,6 +295,8 @@ async def refresh_turn_config() -> None:
 async def websocket_events(websocket: WebSocket) -> None:
     await websocket.accept()
     providers = build_provider_bundle(BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider())
+    if hasattr(providers.llm, "set_runtime_settings"):
+        providers.llm.set_runtime_settings(RUNTIME_SETTINGS)
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     ACTIVE_QUEUES.add(queue)
     sink = QueueEventSink(queue)
@@ -232,6 +320,7 @@ async def websocket_events(websocket: WebSocket) -> None:
         sink=sink,
         tts_chunk_chars=int(turn_config.get("tts_chunk_chars", 120)),
         min_tts_chars=int(turn_config.get("min_tts_chars", 0)),
+        runtime_settings=RUNTIME_SETTINGS,
     )
 
     async def cancel_hook(reason: str) -> None:
@@ -281,6 +370,12 @@ async def websocket_events(websocket: WebSocket) -> None:
                     active_turn.cancel()
                     await sink.emit("turn.cancelled", reason="new_user_text")
                 active_turn = asyncio.create_task(orchestrator.handle_text_turn(text))
+            elif message_type == "user.continue":
+                orchestrator.providers.tts = TTS_MANAGER.get_provider()
+                if active_turn and not active_turn.done():
+                    active_turn.cancel()
+                    await sink.emit("turn.cancelled", reason="continue")
+                active_turn = asyncio.create_task(orchestrator.handle_continue())
             elif message_type == "system_prompt.update":
                 orchestrator.set_system_prompt(str(payload.get("system_prompt", "")))
                 await sink.emit("system_prompt.updated", enabled=bool(orchestrator.state.system_prompt))

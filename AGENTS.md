@@ -16,6 +16,9 @@ This project is intended to become a local, modular conversational AI harness fo
 - Do not let model-specific config leak into orchestration logic. Provider settings belong in profiles/config files, not scattered through the core loop.
 - Do not design around perfect turn boundaries. Real users hesitate, interrupt, mumble, cough, and speak over TTS.
 - Do not make the UI a demo page. The first screen should be the working harness: mic, model status, transcript, response stream, audio state, and latency metrics.
+- Do not hardcode sampler parameters in the LLM provider. Accept a runtime settings reference so the UI can adjust temperature, top_p, etc. without restarting the server. The `effective_sampler()` method merges server defaults from `/props` → profile defaults → user overrides.
+- Do not build the system prompt from a single source. The effective prompt is assembled from: character card (if loaded) or name header → additional instructions → manual textarea. Each layer can be empty. The orchestrator delegates to `RuntimeSettings.effective_system_prompt()`.
+- Do not forget `{{user}}` and `{{char}}` template substitution when processing TavernAI character cards. These appear in `mes_example` and `first_mes` fields and must be resolved to the actual user/AI names before injecting into the prompt.
 
 ## Latency Mistakes To Avoid
 
@@ -26,6 +29,15 @@ This project is intended to become a local, modular conversational AI harness fo
 - Do not optimize only tokens per second. Measure end-to-end stages: mic capture, VAD, ASR partial/final, LLM first token, TTS first chunk, and playback start.
 - Do not over-trust Vulkan. It is promising for llama.cpp on diverse GPUs, but CUDA remains the default path for NVIDIA and for the broader speech stack.
 - Do not assume CPU offload is free. It may make larger models fit, but it can destroy conversational feel if first-token latency gets too high.
+
+## VAD Noise Filtering
+
+- Keystrokes, mouse clicks, and desk bumps produce short transient audio spikes that score 0.3–0.55 on Silero VAD. A two-layer defense is effective:
+  - Raise `speech_threshold` to 0.6 (from default 0.5) to reject most transients at the probability level.
+  - Add `min_speech_duration_ms` (default 200) in the VAD config. When `vad.speech_end` fires, the orchestrator calculates utterance duration from the buffer size. If below the minimum, it emits `vad.speech_rejected` and drops the audio instead of sending to ASR.
+- The duration gate is more robust than threshold tuning alone because real speech is almost always >200ms regardless of volume. Threshold tuning is a softer first filter.
+- `min_speech_duration_ms` defaults to 0 (disabled) if not specified in the profile, so existing profiles are unaffected.
+- The duration gate lives in `main.py` (the orchestration layer), not in `SileroVADProvider`, because the provider only sees individual frames and doesn't know about utterance boundaries.
 
 ## Installation And Runtime Mistakes To Avoid
 
@@ -76,3 +88,20 @@ This project is intended to become a local, modular conversational AI harness fo
 - Prefer boring protocols: HTTP for control, WebSocket for realtime events/audio, OpenAI-compatible APIs where llama.cpp already provides them.
 - Keep the harness useful even when only one component is excellent and the others are merely serviceable.
 - Make failure states friendly. A user should know whether they need a model file, a Hugging Face gate approval, CUDA drivers, Vulkan support, or an audio permission fix.
+
+## Runtime Settings Architecture
+
+- `RuntimeSettings` is a singleton (`RUNTIME_SETTINGS` in `main.py`) that holds runtime-adjustable config: LLM sampler overrides, user/AI names, active character card, and additional system prompt.
+- It persists to `user_settings.json` in the project root. Settings survive server restarts.
+- Sampler values come from a three-tier merge: llama.cpp server defaults (from `/props`) → profile JSON defaults → user overrides from the Settings UI. `sampler_display()` returns the effective values for the UI; `effective_sampler()` returns the merged dict for LLM requests.
+- The `LlamaCppProvider` receives a `RuntimeSettings` reference via `set_runtime_settings()` and calls `effective_sampler()` on every request, so changes take effect immediately.
+- The `ConversationOrchestrator` receives a `RuntimeSettings` reference and delegates system prompt construction to `effective_system_prompt()`, which layers: character card (or name header) → additional instructions → manual textarea.
+- Settings changes are broadcast to all connected WebSocket clients via `settings.updated` events, so multiple tabs stay in sync.
+- When a character card is loaded, its `description`, `personality`, `scenario`, and `mes_example` fields are assembled into the system prompt. The user can still add extra instructions via the additional system prompt textarea or the manual prompt on the Chat tab.
+- TavernAI V2 character cards can come as PNG files (with base64-encoded JSON in a `tEXt` chunk under key `chara`) or standalone JSON. The PNG parser is hand-written (no Pillow dependency) and scans chunks for the `chara` keyword.
+
+## Continue Feature
+
+- The "Continue" button sends a `user.continue` message over WebSocket.
+- The orchestrator's `handle_continue()` takes the last assistant message from history, keeps it as an assistant-role prefix in the conversation, and asks the LLM to continue generating from that point.
+- New tokens are streamed normally and appended to the existing assistant bubble via `llm.token` accumulated text. TTS only plays the new tokens.

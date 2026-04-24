@@ -16,6 +16,12 @@ const state = {
   ttsBusy: false,
   pendingTtsPresetId: null,
   pendingTtsVoiceId: null,
+  settings: null,
+  settingsBusy: false,
+  samplerDefaults: {
+    temperature: 0.7,
+    max_tokens: 256,
+  },
   mic: {
     active: false,
     stream: null,
@@ -39,6 +45,7 @@ const bargeButton = document.querySelector("#barge");
 const stopAudioButton = document.querySelector("#stop-audio");
 const clearButton = document.querySelector("#clear");
 const sendButton = document.querySelector("#send");
+const continueButton = document.querySelector("#continue-btn");
 const deviceSelect = document.querySelector("#device");
 const levelEl = document.querySelector("#level");
 const vadStateEl = document.querySelector("#vad-state");
@@ -54,7 +61,30 @@ const ttsLoadButton = document.querySelector("#tts-load");
 const ttsUnloadButton = document.querySelector("#tts-unload");
 const ttsRuntimeStateEl = document.querySelector("#tts-runtime-state");
 const ttsRuntimeSummaryEl = document.querySelector("#tts-runtime-summary");
+const tabChatButton = document.querySelector("#tab-chat");
+const tabSettingsButton = document.querySelector("#tab-settings");
+const shellEl = document.querySelector(".shell");
+const userNameInput = document.querySelector("#user-name");
+const aiNameInput = document.querySelector("#ai-name");
+const samplerTemperature = document.querySelector("#sampler-temperature");
+const samplerTopK = document.querySelector("#sampler-top-k");
+const samplerTopP = document.querySelector("#sampler-top-p");
+const samplerMinP = document.querySelector("#sampler-min-p");
+const samplerRepeatPenalty = document.querySelector("#sampler-repeat-penalty");
+const samplerFrequencyPenalty = document.querySelector("#sampler-frequency-penalty");
+const samplerPresencePenalty = document.querySelector("#sampler-presence-penalty");
+const samplerMaxTokens = document.querySelector("#sampler-max-tokens");
+const samplerResetButton = document.querySelector("#sampler-reset");
+const characterDrop = document.querySelector("#character-drop");
+const characterFile = document.querySelector("#character-file");
+const characterInfo = document.querySelector("#character-info");
+const characterNameEl = document.querySelector("#character-name");
+const characterDescEl = document.querySelector("#character-description");
+const characterFullEl = document.querySelector("#character-full");
+const characterClearButton = document.querySelector("#character-clear");
+const additionalSystemPromptInput = document.querySelector("#additional-system-prompt");
 let systemPromptTimer = null;
+let settingsSaveTimer = null;
 
 async function loadStatus() {
   const response = await fetch("/api/status");
@@ -78,6 +108,9 @@ function applyStatus(status) {
     : `${status.profile.name} - ${status.profile.description}`;
   renderProviders(status.providers, status.profile.summary || []);
   renderTtsRuntime(status.tts_runtime);
+  if (status.settings) {
+    applySettings(status.settings);
+  }
 }
 
 function renderProviders(providers, summary = []) {
@@ -294,16 +327,31 @@ function handleEvent(event) {
     conversationEl.innerHTML = "";
     latencyEl.innerHTML = "";
     addSystemMessage("Conversation cleared");
+  } else if (event.type === "settings.updated") {
+    applySettings(payload);
   }
 }
 
 function addMessage(kind, text) {
   const node = document.createElement("div");
   node.className = `message ${kind}`;
-  node.textContent = text;
+  if (text) {
+    node.textContent = text;
+  }
   conversationEl.appendChild(node);
   conversationEl.scrollTop = conversationEl.scrollHeight;
   return node;
+}
+
+function displayName(kind) {
+  if (kind === "user") {
+    return state.settings?.user_name || "You";
+  }
+  if (kind === "assistant") {
+    if (state.settings?.character?.name) return state.settings.character.name;
+    return state.settings?.ai_name || "Assistant";
+  }
+  return kind;
 }
 
 function addSystemMessage(text) {
@@ -313,6 +361,7 @@ function addSystemMessage(text) {
 function updateSendState() {
   const connected = state.ws && state.ws.readyState === WebSocket.OPEN;
   sendButton.disabled = !connected || !state.providersReady;
+  continueButton.disabled = !connected || !state.providersReady;
   clearButton.disabled = !connected;
   stopAudioButton.disabled = !connected;
   updateMicState();
@@ -540,6 +589,177 @@ function updateTtsState(active, text) {
   ttsStateEl.textContent = text;
 }
 
+function applySettings(settings) {
+  state.settings = settings;
+  renderNames();
+  renderSampler();
+  renderCharacter();
+  additionalSystemPromptInput.value = settings.additional_system_prompt || "";
+}
+
+function renderNames() {
+  if (!state.settings) return;
+  if (document.activeElement !== userNameInput) {
+    userNameInput.value = state.settings.user_name || "";
+  }
+  if (document.activeElement !== aiNameInput) {
+    aiNameInput.value = state.settings.ai_name || "";
+  }
+}
+
+function renderSampler() {
+  if (!state.settings) return;
+  const display = state.settings.sampler_display || {};
+  const overrides = state.settings.llm_overrides || {};
+  const samplerInputs = {
+    temperature: samplerTemperature,
+    top_k: samplerTopK,
+    top_p: samplerTopP,
+    min_p: samplerMinP,
+    repeat_penalty: samplerRepeatPenalty,
+    frequency_penalty: samplerFrequencyPenalty,
+    presence_penalty: samplerPresencePenalty,
+    max_tokens: samplerMaxTokens,
+  };
+  for (const [key, input] of Object.entries(samplerInputs)) {
+    if (document.activeElement === input) continue;
+    if (key in overrides && overrides[key] !== null && overrides[key] !== undefined) {
+      input.value = overrides[key];
+    } else if (key in display) {
+      input.value = display[key];
+    } else {
+      input.value = "";
+    }
+  }
+}
+
+function renderCharacter() {
+  if (!state.settings) return;
+  const card = state.settings.character;
+  if (card && card.name) {
+    characterInfo.classList.remove("hidden");
+    characterDrop.classList.add("hidden");
+    characterNameEl.textContent = card.name;
+    characterDescEl.textContent = card.description || card.personality || "No description.";
+    const parts = [];
+    if (card.personality) parts.push(`Personality:\n${card.personality}`);
+    if (card.scenario) parts.push(`Scenario:\n${card.scenario}`);
+    if (card.first_mes) parts.push(`First message:\n${card.first_mes}`);
+    if (card.mes_example) parts.push(`Example dialogue:\n${card.mes_example}`);
+    if (card.system_prompt) parts.push(`Card system prompt:\n${card.system_prompt}`);
+    characterFullEl.textContent = parts.join("\n\n") || "No additional details.";
+  } else {
+    characterInfo.classList.add("hidden");
+    characterDrop.classList.remove("hidden");
+  }
+}
+
+function collectSamplerOverrides() {
+  const overrides = {};
+  const pairs = [
+    ["temperature", samplerTemperature],
+    ["top_k", samplerTopK],
+    ["top_p", samplerTopP],
+    ["min_p", samplerMinP],
+    ["repeat_penalty", samplerRepeatPenalty],
+    ["frequency_penalty", samplerFrequencyPenalty],
+    ["presence_penalty", samplerPresencePenalty],
+    ["max_tokens", samplerMaxTokens],
+  ];
+  for (const [key, input] of pairs) {
+    const val = input.value.trim();
+    if (val === "") {
+      overrides[key] = null;
+    } else {
+      const num = Number(val);
+      if (!isNaN(num)) {
+        overrides[key] = num;
+      }
+    }
+  }
+  return overrides;
+}
+
+async function saveSettingsDebounced() {
+  window.clearTimeout(settingsSaveTimer);
+  settingsSaveTimer = window.setTimeout(async () => {
+    const patch = {
+      llm_overrides: collectSamplerOverrides(),
+      user_name: userNameInput.value.trim() || "You",
+      ai_name: aiNameInput.value.trim() || "Assistant",
+      additional_system_prompt: additionalSystemPromptInput.value.trim(),
+    };
+    try {
+      const result = await patchJson("/api/settings", patch);
+      applySettings(result);
+    } catch (error) {
+      audioStatusEl.textContent = `Settings save failed: ${error.message}`;
+    }
+  }, 400);
+}
+
+async function resetSampler() {
+  const patch = { llm_overrides: {} };
+  try {
+    const result = await patchJson("/api/settings", patch);
+    applySettings(result);
+  } catch (error) {
+    audioStatusEl.textContent = `Sampler reset failed: ${error.message}`;
+  }
+}
+
+async function patchJson(url, body) {
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    let message = `${response.status}`;
+    try {
+      const payload = await response.json();
+      message = payload.detail || message;
+    } catch (error) {
+      // Fall back to status text.
+    }
+    throw new Error(message);
+  }
+  return await response.json();
+}
+
+async function uploadCharacterFile(file) {
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const base64Data = reader.result.split(",")[1];
+    try {
+      const result = await postJson("/api/settings/character/upload", {
+        filename: file.name,
+        data: base64Data,
+      });
+      applySettings(result);
+    } catch (error) {
+      audioStatusEl.textContent = `Character import failed: ${error.message}`;
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+async function clearCharacter() {
+  try {
+    const response = await fetch("/api/settings/character", { method: "DELETE" });
+    const result = await response.json();
+    applySettings(result);
+  } catch (error) {
+    audioStatusEl.textContent = `Character clear failed: ${error.message}`;
+  }
+}
+
+function switchTab(tab) {
+  shellEl.dataset.view = tab;
+  tabChatButton.classList.toggle("active", tab === "chat");
+  tabSettingsButton.classList.toggle("active", tab === "settings");
+}
+
 function enqueueAudio(payload) {
   state.audioQueue.push({
     mimeType: payload.mime_type,
@@ -740,6 +960,18 @@ composer.addEventListener("submit", (event) => {
   textInput.value = "";
 });
 
+continueButton.addEventListener("click", () => {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  latencyEl.innerHTML = "";
+  state.playbackStarted = false;
+  state.ws.send(JSON.stringify({
+    type: "user.continue",
+    payload: {},
+  }));
+});
+
 connectButton.addEventListener("click", connect);
 themeToggleButton.addEventListener("click", () => {
   applyTheme(state.theme === "dark" ? "light" : "dark");
@@ -801,6 +1033,43 @@ ttsUnloadButton.addEventListener("click", () => {
   stopAudio();
   withTtsBusy(() => postJson("/api/tts/unload"));
 });
+
+tabChatButton.addEventListener("click", () => switchTab("chat"));
+tabSettingsButton.addEventListener("click", () => switchTab("settings"));
+
+userNameInput.addEventListener("input", saveSettingsDebounced);
+aiNameInput.addEventListener("input", saveSettingsDebounced);
+additionalSystemPromptInput.addEventListener("input", saveSettingsDebounced);
+
+const samplerInputs = [
+  samplerTemperature, samplerTopK, samplerTopP, samplerMinP,
+  samplerRepeatPenalty, samplerFrequencyPenalty, samplerPresencePenalty, samplerMaxTokens,
+];
+for (const input of samplerInputs) {
+  input.addEventListener("input", saveSettingsDebounced);
+}
+samplerResetButton.addEventListener("click", resetSampler);
+
+characterDrop.addEventListener("click", () => characterFile.click());
+characterDrop.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  characterDrop.classList.add("dragover");
+});
+characterDrop.addEventListener("dragleave", () => {
+  characterDrop.classList.remove("dragover");
+});
+characterDrop.addEventListener("drop", (event) => {
+  event.preventDefault();
+  characterDrop.classList.remove("dragover");
+  const file = event.dataTransfer.files[0];
+  if (file) uploadCharacterFile(file);
+});
+characterFile.addEventListener("change", () => {
+  const file = characterFile.files[0];
+  if (file) uploadCharacterFile(file);
+  characterFile.value = "";
+});
+characterClearButton.addEventListener("click", clearCharacter);
 
 loadStatus().catch((error) => {
   profileEl.textContent = `Status failed: ${error.message}`;
