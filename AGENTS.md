@@ -66,6 +66,12 @@ This project is intended to become a local, modular conversational AI harness fo
 - Start with the simplest local cascade that can hold a real conversation.
 - Measure before swapping models.
 - When audio sounds bad, separate model quality from transport quality. For browser TTS playback, avoid starting one `Audio()` element per chunk; prefer scheduled Web Audio playback, larger phrase chunks, and explicit latency markers.
+- For Pocket TTS specifically, the main playback regression was transport-side, not model-side. The effective fix was:
+  - keep Pocket output as raw `pcm_s16le`,
+  - coalesce the model's tiny streaming chunks on the backend into larger packets before sending them over WebSocket,
+  - carry explicit audio metadata such as sample rate, channels, encoding, and duration on `tts.audio`,
+  - build browser `AudioBuffer`s directly from PCM instead of calling `decodeAudioData()` on many tiny standalone WAV chunks.
+- If Pocket TTS sounds choppy again, inspect chunk size, PCM packet coalescing, queue lead, and browser scheduling first. Text normalization quirks such as missing contractions are more likely model behavior than playback transport.
 - Prefer boring protocols: HTTP for control, WebSocket for realtime events/audio, OpenAI-compatible APIs where llama.cpp already provides them.
 - Keep the harness useful even when only one component is excellent and the others are merely serviceable.
 - Make failure states friendly. A user should know whether they need a model file, a Hugging Face gate approval, CUDA drivers, Vulkan support, or an audio permission fix.
