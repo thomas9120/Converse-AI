@@ -29,6 +29,10 @@ This project is intended to become a local, modular conversational AI harness fo
 
 ## Installation And Runtime Mistakes To Avoid
 
+- Do not assume the folder name identifies the active harness. Several similarly named copies may exist; verify with `git status`, `Get-Location`, `/api/status`, and the process command line for port `7860` before editing or debugging.
+- Do not let script defaults disagree with code defaults. `start.*`, `doctor.*`, README instructions, and `config.DEFAULT_PROFILE` should all point at the same intended default profile.
+- Do not diagnose provider behavior from the UI alone. Check `/api/status` to confirm which profile and providers the running server actually loaded.
+- Do not leave a stale server running while testing frontend changes. Confirm which PID owns port `7860`, stop that process if it is this harness, then restart from the intended workspace.
 - Do not require Docker for V1 unless a specific backend truly needs it. The preferred install path is plain scripts.
 - Do not silently download huge gated models without clear status and failure messages.
 - Do not make CUDA mandatory for the whole app. The harness should still run in a reduced mode with llama.cpp CPU/offload and Pocket TTS.
@@ -40,6 +44,7 @@ This project is intended to become a local, modular conversational AI harness fo
 ## Modularity Guidelines
 
 - Define provider contracts before adding model-specific glue.
+- Keep experimental service adapters thin. For Kyutai TTS/STT, prefer a narrow local server boundary first, then replace it with a native websocket or runtime-specific adapter only after the protocol and runtime behavior are proven.
 - Prefer event streams over blocking calls for realtime paths.
 - Keep audio format conversions explicit: sample rate, channel count, frame size, PCM type.
 - Make every provider report capabilities such as `supports_partials`, `supports_streaming_tts`, `supports_barge_in`, `requires_gpu`, and `languages`.
@@ -49,6 +54,7 @@ This project is intended to become a local, modular conversational AI harness fo
 ## Testing Guidelines
 
 - Include canned audio tests for VAD and ASR so regressions do not require live microphone input.
+- Add tests around defaults and profile selection. A working provider can look broken if the app silently starts in `mock-local`.
 - Include a tiny LLM profile for smoke tests.
 - Include a TTS smoke test that writes playable audio and records first-audio latency.
 - Include an integration test for barge-in: user speech begins while TTS is active.
@@ -59,6 +65,7 @@ This project is intended to become a local, modular conversational AI harness fo
 
 - Start with the simplest local cascade that can hold a real conversation.
 - Measure before swapping models.
+- When audio sounds bad, separate model quality from transport quality. For browser TTS playback, avoid starting one `Audio()` element per chunk; prefer scheduled Web Audio playback, larger phrase chunks, and explicit latency markers.
 - Prefer boring protocols: HTTP for control, WebSocket for realtime events/audio, OpenAI-compatible APIs where llama.cpp already provides them.
 - Keep the harness useful even when only one component is excellent and the others are merely serviceable.
 - Make failure states friendly. A user should know whether they need a model file, a Hugging Face gate approval, CUDA drivers, Vulkan support, or an audio permission fix.
