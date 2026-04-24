@@ -44,6 +44,8 @@ Keep future work modular: each VAD, ASR, LLM, and TTS backend should stay behind
   - Browser playback now uses scheduled Web Audio playback with direct PCM buffer construction.
   - TTS text chunking now uses larger phrase-sized chunks with `tts_chunk_chars` and `min_tts_chars`.
   - Pocket TTS playback regression was fixed by coalescing tiny model chunks on the backend, sending raw `pcm_s16le` with explicit metadata, and avoiding per-fragment WAV decode in the browser.
+  - Kokoro ONNX now streams audio incrementally through `create_stream(...)` instead of waiting for full-utterance synthesis.
+  - Kokoro English phonemization now uses Misaki before synthesis, which avoids the earlier `phonemizer` word-count mismatch warnings on English requests.
 - Runtime TTS switching now targets local CPU engines.
   - Pocket TTS remains the default low-latency path.
   - Kokoro v1.0 ONNX is now the second runtime-selectable TTS option.
@@ -54,7 +56,7 @@ Keep future work modular: each VAD, ASR, LLM, and TTS backend should stay behind
   - System prompt editor, dark mode, conversation clear, and stop-audio controls are in place.
   - Runtime TTS preset selection plus generic load/unload controls are in place.
 - Tests.
-  - Current suite passes: `33 passed, 1 skipped`.
+  - Current suite passes: `38 passed, 1 skipped`.
   - Tests cover audio helpers, audio frames, config/provider building, doctor checks, orchestrator events, faster-whisper provider behavior, Pocket TTS behavior, Silero VAD behavior, and optional llama.cpp live integration.
   - Runtime TTS manager and preset switching are covered by tests.
 
@@ -62,7 +64,7 @@ Keep future work modular: each VAD, ASR, LLM, and TTS backend should stay behind
 
 1. Validate and polish Kokoro ONNX as the second CPU TTS engine.
    - Verify first-run model download behavior and error messaging.
-   - Compare Kokoro and Pocket for first-audio latency, quality, and long-form chunking.
+   - Compare Kokoro and Pocket for first-audio latency, quality, and long-form chunking now that Kokoro is using streamed synthesis.
    - Expand the curated English voice list only after a listening pass.
 
 2. Improve runtime/doctor diagnostics.
@@ -75,6 +77,7 @@ Keep future work modular: each VAD, ASR, LLM, and TTS backend should stay behind
    - Save transcript to local text/JSON.
    - Surface provider-specific runtime notes without breaking the generic UI contract.
    - Investigate Pocket TTS text normalization quirks such as missing contractions, treating them as model behavior unless transport evidence appears.
+   - Tune Pocket TTS's existing streaming path: chunk coalescing window, playback queue lead, and phrase chunk sizing.
 
 ## Next Implementation Tracks
 
@@ -87,6 +90,7 @@ Keep future work modular: each VAD, ASR, LLM, and TTS backend should stay behind
   - voice quality,
   - interruption behavior,
   - long response chunking.
+- Pocket TTS already supports streaming in this codebase through `TTSModel.generate_audio_stream(...)`; future work should focus on buffering and latency tuning rather than adding streaming from scratch.
 - Keep the runtime TTS preset switcher generic so future engines can still slot in through a provider adapter plus preset metadata.
 
 ### Kyutai STT

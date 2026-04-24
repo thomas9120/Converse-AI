@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -35,8 +36,11 @@ class KokoroOnnxProvider(TTSProvider):
         self.model_url = str(config.get("model_url", DEFAULT_KOKORO_MODEL_URL))
         self.voices_url = str(config.get("voices_url", DEFAULT_KOKORO_VOICES_URL))
         self._model = config.get("_model")
+        self._g2p = config.get("_g2p")
         self._load_error: str | None = None
+        self._g2p_error: str | None = None
         self._lock = threading.Lock()
+        self._generation_lock = asyncio.Lock()
 
     @property
     def status(self) -> ProviderStatus:
@@ -46,9 +50,21 @@ class KokoroOnnxProvider(TTSProvider):
                 kind="tts",
                 ready=False,
                 message=f"Kokoro ONNX failed to load: {self._load_error}",
-                capabilities=ProviderCapabilities(supports_streaming_tts=False, languages=("en",)),
+                capabilities=ProviderCapabilities(supports_streaming_tts=True, languages=("en",)),
                 provider_id="kokoro-onnx",
                 loaded=False,
+                supports_model_management=True,
+                supports_voice_selection=True,
+            )
+        if self._g2p_error:
+            return ProviderStatus(
+                name="kokoro-onnx",
+                kind="tts",
+                ready=False,
+                message=f"Kokoro English G2P failed: {self._g2p_error}",
+                capabilities=ProviderCapabilities(supports_streaming_tts=True, languages=("en",)),
+                provider_id="kokoro-onnx",
+                loaded=self._model is not None,
                 supports_model_management=True,
                 supports_voice_selection=True,
             )
@@ -63,7 +79,7 @@ class KokoroOnnxProvider(TTSProvider):
             kind="tts",
             ready=True,
             message=message,
-            capabilities=ProviderCapabilities(supports_streaming_tts=False, languages=("en",)),
+            capabilities=ProviderCapabilities(supports_streaming_tts=True, languages=("en",)),
             provider_id="kokoro-onnx",
             loaded=self._model is not None,
             supports_model_management=True,
@@ -73,8 +89,14 @@ class KokoroOnnxProvider(TTSProvider):
     async def check_status(self) -> ProviderStatus:
         try:
             import kokoro_onnx  # noqa: F401
+            if self._should_use_misaki():
+                from misaki import en as _en  # noqa: F401
+                from misaki import espeak as _espeak  # noqa: F401
         except Exception as exc:
-            self._load_error = str(exc)
+            if self._should_use_misaki():
+                self._g2p_error = str(exc)
+            else:
+                self._load_error = str(exc)
         return self.status
 
     async def load(self) -> ProviderStatus:
@@ -87,6 +109,8 @@ class KokoroOnnxProvider(TTSProvider):
             with self._lock:
                 self._model = None
                 self._load_error = None
+                self._g2p = None
+                self._g2p_error = None
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, release)
@@ -100,51 +124,49 @@ class KokoroOnnxProvider(TTSProvider):
         self, text: str, progress: ProgressCallback | None = None
     ) -> AsyncIterator[AudioChunk]:
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[AudioChunk | Exception | None] = asyncio.Queue()
+        self._emit_progress(loop, progress, "loading", f"Loading Kokoro voice '{self.voice}'.")
+        await loop.run_in_executor(None, self._ensure_model)
+        self._emit_progress(loop, progress, "loaded", "Kokoro ready.")
 
-        def worker() -> None:
-            try:
-                with self._lock:
-                    self._emit_progress(loop, progress, "loading", f"Loading Kokoro voice '{self.voice}'.")
-                    self._ensure_model()
-                    self._emit_progress(loop, progress, "loaded", "Kokoro ready.")
-                    self._emit_progress(loop, progress, "generating", "Generating speech.")
-                    audio, sample_rate = self._model.create(
-                        text,
-                        voice=self.voice,
-                        speed=self.speed,
-                        lang=self.lang,
-                        trim=self.trim,
-                    )
-                    pcm_bytes = float_audio_to_pcm_s16le_bytes(audio)
-                    self._emit_progress(loop, progress, "complete", "TTS complete.")
-                    asyncio.run_coroutine_threadsafe(
-                        queue.put(
-                            AudioChunk(
-                                pcm_bytes,
-                                sample_rate=sample_rate,
-                                channels=1,
-                                encoding="pcm_s16le",
-                                duration_ms=int((len(pcm_bytes) // 2) * 1000 / sample_rate) if sample_rate else None,
-                                final=True,
-                            )
-                        ),
-                        loop,
-                    )
-                    asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-            except Exception as exc:
-                self._load_error = str(exc)
-                asyncio.run_coroutine_threadsafe(queue.put(exc), loop)
+        async with self._generation_lock:
+            stream_text = text
+            is_phonemes = False
+            if self._should_use_misaki():
+                self._emit_progress(loop, progress, "phonemizing", "Preparing English phonemes with Misaki.")
+                stream_text = await loop.run_in_executor(None, self._phonemize_english, text)
+                is_phonemes = True
 
-        threading.Thread(target=worker, daemon=True).start()
+            self._emit_progress(loop, progress, "generating", "Generating speech.")
+            index = 0
+            previous_chunk: AudioChunk | None = None
+            async for audio, sample_rate in self._model.create_stream(
+                stream_text,
+                voice=self.voice,
+                speed=self.speed,
+                lang=self.lang,
+                is_phonemes=is_phonemes,
+                trim=self.trim,
+            ):
+                pcm_bytes = float_audio_to_pcm_s16le_bytes(audio)
+                if not pcm_bytes:
+                    continue
+                index += 1
+                current_chunk = AudioChunk(
+                    pcm_bytes,
+                    sample_rate=sample_rate,
+                    channels=1,
+                    encoding="pcm_s16le",
+                    duration_ms=int((len(pcm_bytes) // 2) * 1000 / sample_rate) if sample_rate else None,
+                    final=False,
+                )
+                self._emit_progress(loop, progress, "chunk", f"Generated audio chunk {index}.")
+                if previous_chunk is not None:
+                    yield previous_chunk
+                previous_chunk = current_chunk
 
-        while True:
-            item = await queue.get()
-            if item is None:
-                break
-            if isinstance(item, Exception):
-                raise item
-            yield item
+            if previous_chunk is not None:
+                yield replace(previous_chunk, final=True)
+            self._emit_progress(loop, progress, "complete", "TTS complete.")
 
     def _ensure_model(self) -> None:
         if self._model is not None:
@@ -155,6 +177,37 @@ class KokoroOnnxProvider(TTSProvider):
 
         self._model = Kokoro(str(model_path), str(voices_path))
         self._load_error = None
+        self._g2p_error = None
+
+    def _ensure_g2p(self):
+        if self._g2p is not None:
+            return self._g2p
+        british = self._use_british_english()
+        from misaki import en, espeak
+
+        self._g2p = en.G2P(
+            trf=False,
+            british=british,
+            fallback=espeak.EspeakFallback(british=british),
+        )
+        self._g2p_error = None
+        return self._g2p
+
+    def _phonemize_english(self, text: str) -> str:
+        try:
+            g2p = self._ensure_g2p()
+            phonemes, _tokens = g2p(text)
+            return str(phonemes).strip()
+        except Exception as exc:
+            self._g2p_error = str(exc)
+            raise RuntimeError(f"Misaki English phonemization failed: {exc}") from exc
+
+    def _should_use_misaki(self) -> bool:
+        return self.lang.lower().startswith("en")
+
+    def _use_british_english(self) -> bool:
+        lang = self.lang.lower()
+        return lang.startswith("en-gb") or self.voice.lower().startswith("b")
 
     def _download_asset(self, url: str, filename: str) -> Path:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
