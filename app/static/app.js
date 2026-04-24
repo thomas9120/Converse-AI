@@ -6,10 +6,11 @@ const state = {
   playbackStarted: false,
   playbackContext: null,
   nextAudioTime: 0,
-  playbackLeadTime: 0.035,
+  playbackLeadTime: 0.06,
   scheduledSources: [],
   providersReady: false,
   currentTurnId: null,
+  theme: "light",
   profileAudio: { sample_rate: 16000, channels: 1, frame_ms: 30 },
   mic: {
     active: false,
@@ -28,6 +29,7 @@ const conversationEl = document.querySelector("#conversation");
 const latencyEl = document.querySelector("#latency");
 const eventsEl = document.querySelector("#events");
 const connectButton = document.querySelector("#connect");
+const themeToggleButton = document.querySelector("#theme-toggle");
 const micButton = document.querySelector("#mic");
 const bargeButton = document.querySelector("#barge");
 const stopAudioButton = document.querySelector("#stop-audio");
@@ -146,7 +148,8 @@ function handleEvent(event) {
     updateTtsState(true, "TTS playing");
     setLatency("TTS first chunk", payload.latency_ms);
   } else if (event.type === "tts.audio") {
-    setLatency(`TTS chunk ${payload.chunk_index}`, payload.latency_ms);
+    setMetric("TTS chunks", payload.chunk_index);
+    setMetric("TTS latest bytes", payload.byte_length);
     enqueueAudio(payload);
   } else if (event.type === "tts.progress") {
     updateTtsState(true, payload.message || `TTS ${payload.stage}`);
@@ -229,6 +232,13 @@ function setLatency(label, value) {
   if (value === undefined || value === null) {
     return;
   }
+  setMetric(label, `${value} ms`);
+}
+
+function setMetric(label, value) {
+  if (value === undefined || value === null) {
+    return;
+  }
   let row = latencyEl.querySelector(`[data-label="${label}"]`);
   if (!row) {
     const dt = document.createElement("dt");
@@ -238,7 +248,7 @@ function setLatency(label, value) {
     latencyEl.append(dt, dd);
     row = dd;
   }
-  row.textContent = `${value} ms`;
+  row.textContent = String(value);
 }
 
 async function loadInputDevices() {
@@ -467,8 +477,8 @@ async function playAudioQueue() {
         setLatency("Playback start", item.latencyMs);
       }
       if (item.chunkIndex !== undefined) {
-        setLatency(`Decode ${item.chunkIndex}`, decodeMs);
-        setLatency(`Queue gap ${item.chunkIndex}`, gapMs);
+        setLatency("Decode latest", decodeMs);
+        setLatency("Queue lead", gapMs);
       }
     }
   } catch (error) {
@@ -536,6 +546,13 @@ function sendSystemPromptUpdate() {
   }));
 }
 
+function applyTheme(theme) {
+  state.theme = theme === "dark" ? "dark" : "light";
+  document.body.dataset.theme = state.theme;
+  themeToggleButton.textContent = state.theme === "dark" ? "Light Mode" : "Dark Mode";
+  localStorage.setItem("harness-theme", state.theme);
+}
+
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = textInput.value.trim();
@@ -552,6 +569,9 @@ composer.addEventListener("submit", (event) => {
 });
 
 connectButton.addEventListener("click", connect);
+themeToggleButton.addEventListener("click", () => {
+  applyTheme(state.theme === "dark" ? "light" : "dark");
+});
 micButton.addEventListener("click", () => {
   toggleMic().catch((error) => {
     audioStatusEl.textContent = `Mic failed: ${error.message}`;
@@ -591,3 +611,4 @@ systemPromptInput.addEventListener("change", sendSystemPromptUpdate);
 loadStatus().catch((error) => {
   profileEl.textContent = `Status failed: ${error.message}`;
 });
+applyTheme(localStorage.getItem("harness-theme") || "light");

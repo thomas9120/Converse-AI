@@ -2,6 +2,7 @@
   color-scheme: light;
   --bg: #f7f8fb;
   --panel: #ffffff;
+  --panel-subtle: #eef1f5;
   --text: #17202a;
   --muted: #5d6978;
   --line: #dbe1ea;
@@ -10,6 +11,27 @@
   --warn: #9a5b00;
   --bad: #9a2f2f;
   --good: #176a3a;
+  --user-bg: #e2f3ef;
+  --assistant-bg: #eef1f5;
+  --input-bg: #ffffff;
+}
+
+body[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111416;
+  --panel: #191f22;
+  --panel-subtle: #242b30;
+  --text: #edf2f3;
+  --muted: #a4b0b6;
+  --line: #303940;
+  --accent: #31b8a8;
+  --accent-strong: #52cabb;
+  --warn: #e0aa4f;
+  --bad: #ef7d7d;
+  --good: #75d99b;
+  --user-bg: #123e39;
+  --assistant-bg: #252c32;
+  --input-bg: #111719;
 }
 
 * {
@@ -18,7 +40,8 @@
 
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: Arial, Helvetica, sans-serif;
@@ -32,9 +55,10 @@ textarea {
 
 .shell {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   gap: 14px;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   padding: 18px;
 }
 
@@ -128,6 +152,7 @@ textarea {
   resize: vertical;
   border: 1px solid var(--line);
   border-radius: 6px;
+  background: var(--input-bg);
   padding: 9px 10px;
   color: var(--text);
 }
@@ -182,7 +207,8 @@ select {
   min-height: 36px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fff;
+  background: var(--input-bg);
+  color: var(--text);
   padding: 0 8px;
 }
 
@@ -191,7 +217,7 @@ select {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #eef1f5;
+  background: var(--panel-subtle);
 }
 
 #level {
@@ -237,6 +263,7 @@ select {
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 14px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .conversation,
@@ -265,12 +292,12 @@ select {
 
 .message.user {
   align-self: flex-end;
-  background: #e2f3ef;
+  background: var(--user-bg);
 }
 
 .message.assistant {
   align-self: flex-start;
-  background: #eef1f5;
+  background: var(--assistant-bg);
 }
 
 .message.system {
@@ -280,7 +307,10 @@ select {
 }
 
 .side {
-  overflow: auto;
+  display: grid;
+  grid-template-rows: auto minmax(96px, 0.8fr) auto minmax(120px, 1.2fr);
+  gap: 8px;
+  overflow: hidden;
   padding: 14px;
 }
 
@@ -288,7 +318,10 @@ dl {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 6px 10px;
-  margin: 0 0 18px;
+  align-content: start;
+  overflow: auto;
+  margin: 0;
+  padding-right: 4px;
   font-size: 13px;
 }
 
@@ -305,6 +338,7 @@ ol {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  overflow: auto;
   margin: 0;
   padding-left: 20px;
   color: var(--muted);
@@ -321,6 +355,8 @@ input {
   min-height: 44px;
   border: 1px solid var(--line);
   border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
   padding: 0 12px;
 }
 
@@ -330,6 +366,16 @@ input:focus {
 }
 
 @media (max-width: 850px) {
+  body {
+    overflow: auto;
+  }
+
+  .shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
   .topbar,
   .workspace {
     grid-template-columns: 1fr;
@@ -353,6 +399,11 @@ input:focus {
 
   .workspace {
     display: grid;
+    overflow: visible;
+  }
+
+  .side {
+    max-height: 320px;
   }
 }
 
