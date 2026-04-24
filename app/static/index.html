@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Conversational AI Harness</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <h1>Conversational AI Harness</h1>
+          <p id="profile">Loading profile...</p>
+        </div>
+        <div class="controls">
+          <button id="mic" type="button" disabled>Start Mic</button>
+          <button id="connect" type="button">Connect</button>
+          <button id="barge" type="button" disabled>Barge In</button>
+        </div>
+      </section>
+
+      <section class="status-grid" id="providers"></section>
+
+      <section class="audio-panel">
+        <label for="device">Microphone</label>
+        <select id="device" disabled>
+          <option value="">Default input</option>
+        </select>
+        <div class="meter" aria-label="Input level">
+          <div id="level"></div>
+        </div>
+        <span id="vad-state">VAD idle</span>
+        <span id="asr-state">ASR idle</span>
+        <span id="tts-state">TTS idle</span>
+        <span id="audio-status">Audio idle</span>
+      </section>
+
+      <section class="workspace">
+        <section class="conversation" id="conversation" aria-live="polite"></section>
+        <aside class="side">
+          <h2>Latency</h2>
+          <dl id="latency"></dl>
+          <h2>Events</h2>
+          <ol id="events"></ol>
+        </aside>
+      </section>
+
+      <form class="composer" id="composer">
+        <input id="text" autocomplete="off" placeholder="Type a test utterance while the audio path is being wired..." aria-label="Utterance">
+        <button id="send" type="submit" disabled>Send</button>
+      </form>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

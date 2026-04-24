@@ -1,0 +1,10 @@
+fastapi==0.115.6
+faster-whisper==1.2.1
+httpx==0.28.1
+numpy==2.2.1
+onnxruntime==1.23.2
+pocket-tts==2.0.0
+pytest==8.3.4
+silero-vad==6.2.1
+uvicorn[standard]==0.34.0
+websockets==14.1

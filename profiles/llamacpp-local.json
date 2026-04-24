@@ -1,0 +1,46 @@
+{
+  "name": "llamacpp-local",
+  "description": "Local llama.cpp server with Silero VAD, faster-whisper ASR, and Pocket TTS.",
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "frame_ms": 30,
+    "pre_speech_ms": 450,
+    "max_utterance_ms": 30000
+  },
+  "vad": {
+    "provider": "silero",
+    "speech_threshold": 0.5,
+    "neg_threshold": 0.35,
+    "hangover_ms": 450
+  },
+  "asr": {
+    "provider": "faster-whisper",
+    "model": "large-v3-turbo",
+    "device": "cpu",
+    "compute_type": "int8",
+    "language": "en",
+    "beam_size": 1,
+    "vad_filter": false,
+    "timeout_s": 180
+  },
+  "llm": {
+    "provider": "llamacpp",
+    "base_url": "http://127.0.0.1:8080",
+    "model": "auto",
+    "temperature": 0.7,
+    "max_tokens": 256
+  },
+  "tts": {
+    "provider": "pocket-tts",
+    "voice": "azelma",
+    "temp": 0.7,
+    "max_tokens": 50,
+    "quantize": false
+  },
+  "turn": {
+    "barge_in": "cancel_tts",
+    "tts_chunk_chars": 260,
+    "min_tts_chars": 110
+  }
+}

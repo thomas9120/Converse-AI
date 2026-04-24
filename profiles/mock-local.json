@@ -1,0 +1,33 @@
+{
+  "name": "mock-local",
+  "description": "No-model local smoke profile for UI, orchestration, and latency testing.",
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "frame_ms": 30
+  },
+  "vad": {
+    "provider": "mock",
+    "speech_threshold": 0.5,
+    "hangover_ms": 450
+  },
+  "asr": {
+    "provider": "mock",
+    "supports_partials": true
+  },
+  "llm": {
+    "provider": "mock",
+    "first_token_delay_ms": 120,
+    "token_delay_ms": 28
+  },
+  "tts": {
+    "provider": "mock",
+    "first_chunk_delay_ms": 80,
+    "chunk_delay_ms": 40
+  },
+  "turn": {
+    "barge_in": "cancel_tts",
+    "tts_chunk_chars": 120
+  }
+}
+

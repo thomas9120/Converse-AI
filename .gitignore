@@ -1,0 +1,39 @@
+# Python environments and caches
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+
+# Local runtime logs
+*.log
+server.log
+server.err.log
+
+# Local secrets and machine-specific settings
+.env
+.env.*
+!.env.example
+
+# Downloaded model weights and generated media
+models/
+model-cache/
+outputs/
+*.gguf
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.wav
+*.mp3
+*.flac
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

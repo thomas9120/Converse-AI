@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import AsyncIterator
+
+from conversational_harness.audio import pcm_s16le_to_float32
+from conversational_harness.providers.base import ASRProvider, ProgressCallback, ProviderCapabilities, ProviderStatus, TranscriptEvent
+
+
+class FasterWhisperASRProvider(ASRProvider):
+    def __init__(self, config: dict):
+        self.model_name = str(config.get("model", "large-v3-turbo"))
+        self.device = str(config.get("device", "auto"))
+        self.compute_type = str(config.get("compute_type", "auto"))
+        self.language = config.get("language", "en")
+        self.beam_size = int(config.get("beam_size", 1))
+        self.vad_filter = bool(config.get("vad_filter", False))
+        self.initial_prompt = config.get("initial_prompt")
+        self.timeout_s = float(config.get("timeout_s", 120))
+        self._model = config.get("_model")
+        self._load_error: str | None = None
+
+    @property
+    def status(self) -> ProviderStatus:
+        if self._load_error:
+            return ProviderStatus(
+                name="faster-whisper",
+                kind="asr",
+                ready=False,
+                message=f"faster-whisper failed to load: {self._load_error}",
+                capabilities=ProviderCapabilities(),
+            )
+        message = (
+            f"Configured for {self.model_name} on {self.device}/{self.compute_type}. "
+            "Model loads on first voice transcription and may download if not cached."
+        )
+        if self._model is not None:
+            message = f"Loaded {self.model_name} on {self.device}/{self.compute_type}."
+        return ProviderStatus(
+            name="faster-whisper",
+            kind="asr",
+            ready=True,
+            message=message,
+            capabilities=ProviderCapabilities(languages=(str(self.language),) if self.language else ("auto",)),
+        )
+
+    async def check_status(self) -> ProviderStatus:
+        try:
+            import faster_whisper  # noqa: F401
+        except Exception as exc:
+            self._load_error = str(exc)
+        return self.status
+
+    async def transcribe_text_input(self, text: str) -> AsyncIterator[TranscriptEvent]:
+        stripped = text.strip()
+        if stripped:
+            yield TranscriptEvent(text=stripped, final=True)
+
+    async def transcribe_audio(
+        self, pcm_s16le: bytes, sample_rate: int, progress: ProgressCallback | None = None
+    ) -> AsyncIterator[TranscriptEvent]:
+        if sample_rate != 16000:
+            raise ValueError(f"faster-whisper expects 16000 Hz audio, got {sample_rate}")
+        audio = pcm_s16le_to_float32(pcm_s16le)
+        if audio.size == 0:
+            return
+        if progress:
+            await progress(
+                "asr.progress",
+                {
+                    "stage": "queued",
+                    "message": f"Queued {round(audio.size / sample_rate, 2)}s utterance for faster-whisper.",
+                },
+            )
+        loop = asyncio.get_running_loop()
+        segments_text = await asyncio.wait_for(
+            asyncio.to_thread(self._transcribe_blocking, audio, progress, loop),
+            timeout=self.timeout_s,
+        )
+        text = " ".join(part for part in segments_text if part).strip()
+        if progress:
+            await progress("asr.progress", {"stage": "complete", "message": "ASR transcription complete."})
+        if text:
+            yield TranscriptEvent(text=text, final=True)
+
+    def _transcribe_blocking(self, audio, progress: ProgressCallback | None, loop: asyncio.AbstractEventLoop) -> list[str]:
+        started = time.perf_counter()
+        self._emit_progress_threadsafe(loop, progress, "loading", f"Loading faster-whisper model {self.model_name}.")
+        self._ensure_model()
+        self._emit_progress_threadsafe(
+            loop,
+            progress,
+            "loaded",
+            f"Model ready after {round(time.perf_counter() - started, 1)}s. Running inference.",
+        )
+        segments, _info = self._model.transcribe(
+            audio,
+            language=self.language,
+            beam_size=self.beam_size,
+            vad_filter=self.vad_filter,
+            initial_prompt=self.initial_prompt,
+        )
+        texts = []
+        for segment in segments:
+            text = segment.text.strip()
+            if text:
+                texts.append(text)
+                start = getattr(segment, "start", None)
+                end = getattr(segment, "end", None)
+                prefix = ""
+                if start is not None and end is not None:
+                    prefix = f"Segment {round(float(start), 2)}-{round(float(end), 2)}s: "
+                self._emit_progress_threadsafe(
+                    loop,
+                    progress,
+                    "segment",
+                    f"{prefix}{text}",
+                )
+        return texts
+
+    def _ensure_model(self) -> None:
+        if self._model is not None:
+            return
+        try:
+            from faster_whisper import WhisperModel
+
+            self._model = WhisperModel(self.model_name, device=self.device, compute_type=self.compute_type)
+        except Exception as exc:
+            self._load_error = str(exc)
+            raise
+
+    def _emit_progress_threadsafe(
+        self, loop: asyncio.AbstractEventLoop, progress: ProgressCallback | None, stage: str, message: str
+    ) -> None:
+        if not progress:
+            return
+        loop.call_soon_threadsafe(asyncio.create_task, progress("asr.progress", {"stage": stage, "message": message}))

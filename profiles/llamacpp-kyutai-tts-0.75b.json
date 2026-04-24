@@ -1,0 +1,47 @@
+{
+  "name": "llamacpp-kyutai-tts-0.75b",
+  "description": "Local llama.cpp server with Silero VAD, faster-whisper ASR, and an external Kyutai TTS 0.75B HTTP wrapper.",
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "frame_ms": 30,
+    "pre_speech_ms": 450,
+    "max_utterance_ms": 30000
+  },
+  "vad": {
+    "provider": "silero",
+    "speech_threshold": 0.5,
+    "neg_threshold": 0.35,
+    "hangover_ms": 450
+  },
+  "asr": {
+    "provider": "faster-whisper",
+    "model": "large-v3-turbo",
+    "device": "cpu",
+    "compute_type": "int8",
+    "language": "en",
+    "beam_size": 1,
+    "vad_filter": false,
+    "timeout_s": 180
+  },
+  "llm": {
+    "provider": "llamacpp",
+    "base_url": "http://127.0.0.1:8080",
+    "model": "auto",
+    "temperature": 0.7,
+    "max_tokens": 256
+  },
+  "tts": {
+    "provider": "kyutai-tts-server",
+    "base_url": "http://127.0.0.1:8998",
+    "health_path": "/health",
+    "synthesize_path": "/tts",
+    "model": "kyutai/tts-0.75b-en-public",
+    "voice": "default",
+    "timeout_s": 180
+  },
+  "turn": {
+    "barge_in": "cancel_tts",
+    "tts_chunk_chars": 260
+  }
+}
