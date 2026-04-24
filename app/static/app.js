@@ -45,6 +45,7 @@ const bargeButton = document.querySelector("#barge");
 const stopAudioButton = document.querySelector("#stop-audio");
 const clearButton = document.querySelector("#clear");
 const sendButton = document.querySelector("#send");
+const continueButton = document.querySelector("#continue-btn");
 const deviceSelect = document.querySelector("#device");
 const levelEl = document.querySelector("#level");
 const vadStateEl = document.querySelector("#vad-state");
@@ -360,6 +361,7 @@ function addSystemMessage(text) {
 function updateSendState() {
   const connected = state.ws && state.ws.readyState === WebSocket.OPEN;
   sendButton.disabled = !connected || !state.providersReady;
+  continueButton.disabled = !connected || !state.providersReady;
   clearButton.disabled = !connected;
   stopAudioButton.disabled = !connected;
   updateMicState();
@@ -607,6 +609,7 @@ function renderNames() {
 
 function renderSampler() {
   if (!state.settings) return;
+  const display = state.settings.sampler_display || {};
   const overrides = state.settings.llm_overrides || {};
   const samplerInputs = {
     temperature: samplerTemperature,
@@ -622,6 +625,8 @@ function renderSampler() {
     if (document.activeElement === input) continue;
     if (key in overrides && overrides[key] !== null && overrides[key] !== undefined) {
       input.value = overrides[key];
+    } else if (key in display) {
+      input.value = display[key];
     } else {
       input.value = "";
     }
@@ -953,6 +958,18 @@ composer.addEventListener("submit", (event) => {
     payload: { text, system_prompt: systemPromptInput.value },
   }));
   textInput.value = "";
+});
+
+continueButton.addEventListener("click", () => {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  latencyEl.innerHTML = "";
+  state.playbackStarted = false;
+  state.ws.send(JSON.stringify({
+    type: "user.continue",
+    payload: {},
+  }));
 });
 
 connectButton.addEventListener("click", connect);

@@ -154,6 +154,18 @@ button:not(:disabled):hover {
   border-color: var(--accent);
 }
 
+#continue-btn {
+  background: var(--panel-subtle);
+  color: var(--text);
+  border-color: var(--line);
+  font-size: 13px;
+}
+
+#continue-btn:not(:disabled):hover {
+  border-color: var(--accent);
+  background: var(--panel);
+}
+
 #send:not(:disabled):hover,
 #connect:not(:disabled):hover {
   background: var(--accent-strong);

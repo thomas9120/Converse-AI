@@ -115,6 +115,42 @@ class ConversationOrchestrator:
 
         await self._respond_to_transcript(final_transcript, started, turn_id)
 
+    async def handle_continue(self) -> None:
+        if not self.state.messages or self.state.messages[-1]["role"] != "assistant":
+            await self.sink.emit("turn.error", message="No previous assistant message to continue.")
+            return
+        started = time.perf_counter()
+        turn_id = self._next_turn_id()
+        await self.cancel_tts("continue_turn")
+        await self.sink.emit("turn.started", source="continue", turn_id=turn_id)
+        prefix = self.state.messages[-1]["content"]
+        self.state.messages.pop()
+        self.state.messages.append({"role": "assistant", "content": prefix})
+        response_text = prefix
+        first_token_seen = False
+        sentence_buffer = ""
+
+        try:
+            async for token in self.providers.llm.stream_response(self._llm_messages()):
+                if not first_token_seen:
+                    first_token_seen = True
+                    await self.sink.emit("llm.first_token", latency_ms=elapsed_ms(started))
+                response_text += token
+                sentence_buffer += token
+                await self.sink.emit("llm.token", text=token, accumulated=response_text)
+
+                if should_flush_tts(sentence_buffer, self.tts_chunk_chars, self.min_tts_chars):
+                    await self._start_tts_chunk(sentence_buffer.strip(), started, turn_id)
+                    sentence_buffer = ""
+
+            if sentence_buffer.strip():
+                await self._start_tts_chunk(sentence_buffer.strip(), started, turn_id)
+
+            self.state.messages[-1] = {"role": "assistant", "content": response_text.strip()}
+            await self.sink.emit("turn.finished", latency_ms=elapsed_ms(started))
+        except Exception as exc:
+            await self.sink.emit("turn.error", message=str(exc), latency_ms=elapsed_ms(started))
+
     async def _respond_to_transcript(self, final_transcript: str, started: float, turn_id: int) -> None:
         self.state.messages.append({"role": "user", "content": final_transcript})
         response_text = ""

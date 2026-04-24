@@ -129,11 +129,45 @@ class RuntimeSettings:
     character: CharacterCard | None = None
     additional_system_prompt: str = ""
     profile_defaults: dict[str, Any] = field(default_factory=dict)
+    server_defaults: dict[str, Any] = field(default_factory=dict)
 
     def effective_sampler(self) -> dict[str, Any]:
-        result = dict(self.profile_defaults)
+        result = dict(self.server_defaults)
+        result.update({k: v for k, v in self.profile_defaults.items() if v is not None})
         result.update({k: v for k, v in self.llm_overrides.items() if v is not None})
         return result
+
+    def sampler_display(self) -> dict[str, Any]:
+        display = {}
+        for key in SAMPLER_KEYS:
+            if key in self.llm_overrides and self.llm_overrides[key] is not None:
+                display[key] = self.llm_overrides[key]
+            elif key in self.profile_defaults and self.profile_defaults[key] is not None:
+                display[key] = self.profile_defaults[key]
+            elif key in self.server_defaults and self.server_defaults[key] is not None:
+                display[key] = self.server_defaults[key]
+        return display
+
+    def set_server_defaults(self, params: dict[str, Any]) -> None:
+        mapping = {
+            "temperature": "temperature",
+            "top_k": "top_k",
+            "top_p": "top_p",
+            "min_p": "min_p",
+            "typical_p": "typical_p",
+            "repeat_penalty": "repeat_penalty",
+            "frequency_penalty": "frequency_penalty",
+            "presence_penalty": "presence_penalty",
+            "mirostat_tau": "mirostat_tau",
+            "mirostat_eta": "mirostat_eta",
+            "max_tokens": "n_predict",
+        }
+        self.server_defaults = {}
+        for target, source in mapping.items():
+            if source in params and params[source] is not None:
+                self.server_defaults[target] = params[source]
+        if "max_tokens" in self.server_defaults and self.server_defaults["max_tokens"] == -1:
+            del self.server_defaults["max_tokens"]
 
     def effective_system_prompt(self, manual_prompt: str = "") -> str:
         parts: list[str] = []
@@ -165,6 +199,7 @@ class RuntimeSettings:
             "user_name": self.user_name,
             "ai_name": self.ai_name,
             "additional_system_prompt": self.additional_system_prompt,
+            "sampler_display": self.sampler_display(),
         }
         if self.character:
             result["character"] = self.character.to_dict()

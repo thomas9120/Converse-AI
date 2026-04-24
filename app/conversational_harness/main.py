@@ -37,6 +37,7 @@ TURN_CONFIG_HOOKS: set[Any] = set()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await _fetch_llm_server_defaults()
     yield
     logger.info("Shutting down: cleaning up providers and active connections.")
     await cancel_active_tts("shutdown")
@@ -60,6 +61,21 @@ RUNTIME_SETTINGS = load_runtime_settings(BASE_CONFIG.section("llm"))
 ACTIVE_QUEUES: set[asyncio.Queue[dict[str, Any]]] = set()
 TTS_CANCEL_HOOKS: set[Any] = set()
 TURN_CONFIG_HOOKS: set[Any] = set()
+
+
+async def _fetch_llm_server_defaults() -> None:
+    llm_config = BASE_CONFIG.section("llm")
+    base_url = str(llm_config.get("base_url", "http://127.0.0.1:8080")).rstrip("/")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=1.0, read=3.0)) as client:
+            resp = await client.get(f"{base_url}/props")
+            resp.raise_for_status()
+            params = resp.json().get("default_generation_settings", {}).get("params", {})
+            RUNTIME_SETTINGS.set_server_defaults(params)
+            logger.info("Fetched llama.cpp server defaults: %s", list(RUNTIME_SETTINGS.server_defaults.keys()))
+    except Exception as exc:
+        logger.info("Could not fetch llama.cpp server defaults: %s", exc)
 
 
 @app.get("/")
@@ -354,6 +370,12 @@ async def websocket_events(websocket: WebSocket) -> None:
                     active_turn.cancel()
                     await sink.emit("turn.cancelled", reason="new_user_text")
                 active_turn = asyncio.create_task(orchestrator.handle_text_turn(text))
+            elif message_type == "user.continue":
+                orchestrator.providers.tts = TTS_MANAGER.get_provider()
+                if active_turn and not active_turn.done():
+                    active_turn.cancel()
+                    await sink.emit("turn.cancelled", reason="continue")
+                active_turn = asyncio.create_task(orchestrator.handle_continue())
             elif message_type == "system_prompt.update":
                 orchestrator.set_system_prompt(str(payload.get("system_prompt", "")))
                 await sink.emit("system_prompt.updated", enabled=bool(orchestrator.state.system_prompt))
