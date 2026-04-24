@@ -17,6 +17,7 @@ server.err.log
 .env
 .env.*
 !.env.example
+user_settings.json
 
 # Downloaded model weights and generated media
 models/
