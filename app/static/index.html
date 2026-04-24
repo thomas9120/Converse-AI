@@ -30,6 +30,19 @@
         <textarea id="system-prompt" rows="3" placeholder="Optional instructions for the assistant. Applies to typed and voice turns."></textarea>
       </section>
 
+      <section class="tts-panel">
+        <label for="tts-preset">TTS preset</label>
+        <select id="tts-preset">
+          <option value="">Loading presets...</option>
+        </select>
+        <div class="tts-actions">
+          <button id="tts-load" type="button">Load</button>
+          <button id="tts-unload" type="button">Unload</button>
+        </div>
+        <span id="tts-runtime-state">TTS runtime loading...</span>
+        <span id="tts-runtime-summary"></span>
+      </section>
+
       <section class="audio-panel">
         <label for="device">Microphone</label>
         <select id="device" disabled>

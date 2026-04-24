@@ -6,12 +6,14 @@ const state = {
   playbackStarted: false,
   playbackContext: null,
   nextAudioTime: 0,
-  playbackLeadTime: 0.06,
+  playbackLeadTime: 0.12,
   scheduledSources: [],
   providersReady: false,
   currentTurnId: null,
   theme: "light",
   profileAudio: { sample_rate: 16000, channels: 1, frame_ms: 30 },
+  ttsRuntime: null,
+  ttsBusy: false,
   mic: {
     active: false,
     stream: null,
@@ -44,15 +46,29 @@ const audioStatusEl = document.querySelector("#audio-status");
 const composer = document.querySelector("#composer");
 const textInput = document.querySelector("#text");
 const systemPromptInput = document.querySelector("#system-prompt");
+const ttsPresetEl = document.querySelector("#tts-preset");
+const ttsLoadButton = document.querySelector("#tts-load");
+const ttsUnloadButton = document.querySelector("#tts-unload");
+const ttsRuntimeStateEl = document.querySelector("#tts-runtime-state");
+const ttsRuntimeSummaryEl = document.querySelector("#tts-runtime-summary");
 let systemPromptTimer = null;
 
 async function loadStatus() {
   const response = await fetch("/api/status");
   const status = await response.json();
-  state.profileAudio = status.profile.audio || state.profileAudio;
-  profileEl.textContent = `${status.profile.name} - ${status.profile.description}`;
-  renderProviders(status.providers, status.profile.summary || []);
+  applyStatus(status);
   await loadInputDevices();
+}
+
+function applyStatus(status) {
+  state.profileAudio = status.profile.audio || state.profileAudio;
+  state.ttsRuntime = status.tts_runtime || null;
+  const override = status.tts_runtime?.selected_preset?.label;
+  profileEl.textContent = override
+    ? `${status.profile.name} - ${status.profile.description} - TTS override: ${override}`
+    : `${status.profile.name} - ${status.profile.description}`;
+  renderProviders(status.providers, status.profile.summary || []);
+  renderTtsRuntime(status.tts_runtime);
 }
 
 function renderProviders(providers, summary = []) {
@@ -61,7 +77,7 @@ function renderProviders(providers, summary = []) {
   updateSendState();
   for (const provider of providers) {
     const details = summary.find((item) => item.kind === provider.kind) || {};
-    const detailText = formatProviderDetails(details);
+    const detailText = formatProviderDetails(details, provider);
     const node = document.createElement("article");
     node.className = "provider";
     node.dataset.ready = provider.ready ? "true" : "false";
@@ -75,14 +91,76 @@ function renderProviders(providers, summary = []) {
   }
 }
 
-function formatProviderDetails(details) {
+function formatProviderDetails(details, provider = {}) {
   const parts = [];
   for (const key of ["provider", "model", "device", "compute_type", "endpoint", "voice"]) {
     if (details[key]) {
       parts.push(`${key}: ${details[key]}`);
     }
   }
+  if (provider.kind === "tts") {
+    if (provider.selected) {
+      parts.push("selected");
+    }
+    if (provider.managed_externally) {
+      parts.push("external");
+    } else if (provider.loaded) {
+      parts.push("loaded");
+    } else {
+      parts.push("unloaded");
+    }
+  }
   return parts.join(" | ");
+}
+
+function renderTtsRuntime(runtime) {
+  state.ttsRuntime = runtime || null;
+  ttsPresetEl.innerHTML = "";
+  const presets = runtime?.presets || [];
+  for (const preset of presets) {
+    const option = document.createElement("option");
+    option.value = preset.id;
+    option.textContent = preset.label;
+    if (preset.id === runtime?.selected_preset_id) {
+      option.selected = true;
+    }
+    ttsPresetEl.appendChild(option);
+  }
+  if (presets.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No presets available";
+    ttsPresetEl.appendChild(option);
+  }
+
+  const status = runtime?.status;
+  let mode = "unavailable";
+  let text = "TTS unavailable";
+  if (status) {
+    if (!status.ready) {
+      mode = "unavailable";
+      text = "Unavailable";
+    } else if (status.managed_externally) {
+      mode = "external";
+      text = "External";
+    } else if (status.loaded) {
+      mode = "loaded";
+      text = "Loaded";
+    } else {
+      mode = "unloaded";
+      text = "Unloaded";
+    }
+  }
+  ttsRuntimeStateEl.dataset.mode = mode;
+  ttsRuntimeStateEl.textContent = text;
+  ttsRuntimeSummaryEl.textContent = runtime?.selected_preset
+    ? `${runtime.selected_preset.label} - ${runtime.selected_preset.description}`
+    : "";
+
+  const supportsManagement = Boolean(status?.supports_model_management);
+  ttsPresetEl.disabled = state.ttsBusy || presets.length === 0;
+  ttsLoadButton.disabled = state.ttsBusy || !supportsManagement;
+  ttsUnloadButton.disabled = state.ttsBusy || !supportsManagement;
 }
 
 function connect() {
@@ -118,6 +196,7 @@ function handleEvent(event) {
   const payload = event.payload || {};
   if (event.type === "providers.status") {
     renderProviders(payload.providers, payload.summary || []);
+    renderTtsRuntime(payload.tts_runtime || state.ttsRuntime);
   } else if (event.type === "turn.started") {
     latencyEl.innerHTML = "";
     state.currentTurnId = payload.turn_id || null;
@@ -431,6 +510,10 @@ function updateTtsState(active, text) {
 function enqueueAudio(payload) {
   state.audioQueue.push({
     mimeType: payload.mime_type,
+    encoding: payload.encoding,
+    sampleRate: payload.sample_rate,
+    channels: payload.channels,
+    durationMs: payload.duration_ms,
     base64: payload.data,
     latencyMs: payload.latency_ms,
     chunkIndex: payload.chunk_index,
@@ -463,7 +546,7 @@ async function playAudioQueue() {
       source.connect(context.destination);
 
       const now = context.currentTime;
-      const gapMs = Math.max(0, Math.round((state.nextAudioTime - now) * 1000));
+      const leadMs = Math.max(0, Math.round((state.nextAudioTime - now) * 1000));
       const startAt = Math.max(now + state.playbackLeadTime, state.nextAudioTime);
       source.start(startAt);
       state.nextAudioTime = startAt + audioBuffer.duration;
@@ -478,7 +561,7 @@ async function playAudioQueue() {
       }
       if (item.chunkIndex !== undefined) {
         setLatency("Decode latest", decodeMs);
-        setLatency("Queue lead", gapMs);
+        setLatency("Queue lead", leadMs);
       }
     }
   } catch (error) {
@@ -501,7 +584,24 @@ function getPlaybackContext() {
 
 async function decodeAudioChunk(context, item) {
   const bytes = bytesFromBase64(item.base64);
-  return await context.decodeAudioData(bytes.buffer);
+  if (item.encoding === "pcm_s16le") {
+    return decodePcm16Chunk(context, bytes, item.sampleRate || 24000, item.channels || 1);
+  }
+  return await context.decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+}
+
+function decodePcm16Chunk(context, bytes, sampleRate, channels) {
+  const bytesPerSample = 2;
+  const frameCount = Math.floor(bytes.byteLength / bytesPerSample / channels);
+  const buffer = context.createBuffer(channels, frameCount, sampleRate);
+  const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, frameCount * channels);
+  for (let channel = 0; channel < channels; channel += 1) {
+    const output = buffer.getChannelData(channel);
+    for (let index = 0; index < frameCount; index += 1) {
+      output[index] = pcm[index * channels + channel] / 32768;
+    }
+  }
+  return buffer;
 }
 
 function bytesFromBase64(base64) {
@@ -551,6 +651,41 @@ function applyTheme(theme) {
   document.body.dataset.theme = state.theme;
   themeToggleButton.textContent = state.theme === "dark" ? "Light Mode" : "Dark Mode";
   localStorage.setItem("harness-theme", state.theme);
+}
+
+async function postJson(url, body = {}) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    let message = `${response.status}`;
+    try {
+      const payload = await response.json();
+      message = payload.detail || message;
+    } catch (error) {
+      // Fall back to status text.
+    }
+    throw new Error(message);
+  }
+  return await response.json();
+}
+
+async function withTtsBusy(action) {
+  state.ttsBusy = true;
+  renderTtsRuntime(state.ttsRuntime);
+  try {
+    const runtime = await action();
+    state.ttsRuntime = runtime;
+    renderTtsRuntime(runtime);
+  } catch (error) {
+    audioStatusEl.textContent = `TTS runtime error: ${error.message}`;
+  } finally {
+    state.ttsBusy = false;
+    renderTtsRuntime(state.ttsRuntime);
+    await loadStatus();
+  }
 }
 
 composer.addEventListener("submit", (event) => {
@@ -607,6 +742,19 @@ systemPromptInput.addEventListener("input", () => {
   systemPromptTimer = window.setTimeout(sendSystemPromptUpdate, 350);
 });
 systemPromptInput.addEventListener("change", sendSystemPromptUpdate);
+ttsPresetEl.addEventListener("change", () => {
+  if (!ttsPresetEl.value) {
+    return;
+  }
+  withTtsBusy(() => postJson("/api/tts/select", { preset_id: ttsPresetEl.value }));
+});
+ttsLoadButton.addEventListener("click", () => {
+  withTtsBusy(() => postJson("/api/tts/load"));
+});
+ttsUnloadButton.addEventListener("click", () => {
+  stopAudio();
+  withTtsBusy(() => postJson("/api/tts/unload"));
+});
 
 loadStatus().catch((error) => {
   profileEl.textContent = `Status failed: ${error.message}`;

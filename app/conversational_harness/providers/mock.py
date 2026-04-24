@@ -28,6 +28,7 @@ class MockVADProvider(VADProvider):
             ready=True,
             message="Mock VAD accepts browser speech-start/speech-end events.",
             capabilities=ProviderCapabilities(supports_barge_in=True),
+            provider_id="mock",
         )
 
     async def check_status(self) -> ProviderStatus:
@@ -49,6 +50,7 @@ class MockASRProvider(ASRProvider):
             ready=True,
             message="Text input is treated as the final transcript.",
             capabilities=ProviderCapabilities(supports_partials=True),
+            provider_id="mock",
         )
 
     async def check_status(self) -> ProviderStatus:
@@ -84,6 +86,7 @@ class MockLLMProvider(LLMProvider):
             ready=True,
             message="Mock LLM streams a deterministic local response.",
             capabilities=ProviderCapabilities(),
+            provider_id="mock",
         )
 
     async def check_status(self) -> ProviderStatus:
@@ -115,9 +118,16 @@ class MockTTSProvider(TTSProvider):
             ready=True,
             message="Mock TTS emits short WAV tones so playback paths can be tested.",
             capabilities=ProviderCapabilities(supports_streaming_tts=True),
+            provider_id="mock",
         )
 
     async def check_status(self) -> ProviderStatus:
+        return self.status
+
+    async def load(self) -> ProviderStatus:
+        return self.status
+
+    async def unload(self) -> ProviderStatus:
         return self.status
 
     async def stream_audio(self, text: str) -> AsyncIterator[AudioChunk]:

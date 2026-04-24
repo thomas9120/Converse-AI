@@ -55,6 +55,16 @@ def float_audio_to_wav_bytes(audio, sample_rate: int) -> bytes:
     return buffer.getvalue()
 
 
+def float_audio_to_pcm_s16le_bytes(audio) -> bytes:
+    array = tensor_or_array_to_numpy(audio)
+    if array.size == 0:
+        return b""
+    array = np.asarray(array, dtype=np.float32).reshape(-1)
+    clipped = np.clip(array, -1.0, 1.0)
+    pcm = np.where(clipped < 0, clipped * 32768, clipped * 32767).astype("<i2")
+    return pcm.tobytes()
+
+
 def tensor_or_array_to_numpy(audio) -> np.ndarray:
     if hasattr(audio, "detach"):
         audio = audio.detach().cpu().numpy()

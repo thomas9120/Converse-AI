@@ -5,7 +5,7 @@ import threading
 import time
 from typing import AsyncIterator
 
-from conversational_harness.audio import float_audio_to_wav_bytes
+from conversational_harness.audio import float_audio_to_pcm_s16le_bytes
 from conversational_harness.providers.base import AudioChunk, ProgressCallback, ProviderCapabilities, ProviderStatus, TTSProvider
 
 
@@ -16,6 +16,7 @@ class PocketTTSProvider(TTSProvider):
         self.temp = float(config.get("temp", 0.7))
         self.max_tokens = int(config.get("max_tokens", 50))
         self.quantize = bool(config.get("quantize", False))
+        self.coalesce_ms = int(config.get("coalesce_ms", 400))
         self._model = config.get("_model")
         self._voice_state = config.get("_voice_state")
         self._load_error: str | None = None
@@ -30,6 +31,10 @@ class PocketTTSProvider(TTSProvider):
                 ready=False,
                 message=f"Pocket TTS failed to load: {self._load_error}",
                 capabilities=ProviderCapabilities(supports_streaming_tts=True),
+                provider_id="pocket-tts",
+                loaded=False,
+                supports_model_management=True,
+                supports_voice_selection=True,
             )
         if self._model is not None and self._voice_state is not None:
             message = f"Loaded Pocket TTS voice '{self.voice}'."
@@ -41,6 +46,10 @@ class PocketTTSProvider(TTSProvider):
             ready=True,
             message=message,
             capabilities=ProviderCapabilities(supports_streaming_tts=True, languages=("en",)),
+            provider_id="pocket-tts",
+            loaded=self._model is not None and self._voice_state is not None,
+            supports_model_management=True,
+            supports_voice_selection=True,
         )
 
     async def check_status(self) -> ProviderStatus:
@@ -48,6 +57,22 @@ class PocketTTSProvider(TTSProvider):
             import pocket_tts  # noqa: F401
         except Exception as exc:
             self._load_error = str(exc)
+        return self.status
+
+    async def load(self) -> ProviderStatus:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._ensure_model)
+        return self.status
+
+    async def unload(self) -> ProviderStatus:
+        def release() -> None:
+            with self._lock:
+                self._model = None
+                self._voice_state = None
+                self._load_error = None
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, release)
         return self.status
 
     async def stream_audio(self, text: str) -> AsyncIterator[AudioChunk]:
@@ -73,6 +98,9 @@ class PocketTTSProvider(TTSProvider):
                         f"Pocket TTS ready after {round(time.perf_counter() - started, 1)}s.",
                     )
                     self._emit_progress(loop, progress, "generating", "Generating speech.")
+                    target_samples = max(1, int(self._model.sample_rate * self.coalesce_ms / 1000))
+                    pending = bytearray()
+                    pending_samples = 0
                     chunks = self._model.generate_audio_stream(
                         self._voice_state,
                         text,
@@ -80,13 +108,42 @@ class PocketTTSProvider(TTSProvider):
                         copy_state=True,
                     )
                     for index, audio in enumerate(chunks):
-                        wav_bytes = float_audio_to_wav_bytes(audio, self._model.sample_rate)
-                        if wav_bytes:
+                        pcm_bytes = float_audio_to_pcm_s16le_bytes(audio)
+                        if not pcm_bytes:
+                            continue
+                        pending.extend(pcm_bytes)
+                        pending_samples += len(pcm_bytes) // 2
+                        if pending_samples >= target_samples:
                             self._emit_progress(loop, progress, "chunk", f"Generated audio chunk {index + 1}.")
                             asyncio.run_coroutine_threadsafe(
-                                queue.put(AudioChunk(wav_bytes, "audio/wav", final=False)),
+                                queue.put(
+                                    AudioChunk(
+                                        bytes(pending),
+                                        sample_rate=self._model.sample_rate,
+                                        channels=1,
+                                        encoding="pcm_s16le",
+                                        duration_ms=int(pending_samples * 1000 / self._model.sample_rate),
+                                        final=False,
+                                    )
+                                ),
                                 loop,
                             )
+                            pending.clear()
+                            pending_samples = 0
+                    if pending:
+                        asyncio.run_coroutine_threadsafe(
+                            queue.put(
+                                AudioChunk(
+                                    bytes(pending),
+                                    sample_rate=self._model.sample_rate,
+                                    channels=1,
+                                    encoding="pcm_s16le",
+                                    duration_ms=int(pending_samples * 1000 / self._model.sample_rate),
+                                    final=True,
+                                )
+                            ),
+                            loop,
+                        )
                     self._emit_progress(loop, progress, "complete", "TTS complete.")
                     asyncio.run_coroutine_threadsafe(queue.put(None), loop)
             except Exception as exc:

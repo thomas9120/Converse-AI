@@ -27,8 +27,8 @@ def test_build_tts_returns_pocket_provider():
     assert isinstance(provider, PocketTTSProvider)
 
 
-def test_pocket_tts_streams_wav_with_progress():
-    provider = PocketTTSProvider({"_model": FakePocketModel(), "voice": "azelma"})
+def test_pocket_tts_streams_pcm_with_progress():
+    provider = PocketTTSProvider({"_model": FakePocketModel(), "voice": "azelma", "coalesce_ms": 5})
 
     async def run():
         progress_events = []
@@ -44,6 +44,8 @@ def test_pocket_tts_streams_wav_with_progress():
     chunks, progress_events = asyncio.run(run())
 
     assert chunks
-    assert chunks[0].mime_type == "audio/wav"
-    assert chunks[0].data[:4] == b"RIFF"
+    assert chunks[0].encoding == "pcm_s16le"
+    assert chunks[0].sample_rate == 24000
+    assert chunks[0].channels == 1
+    assert chunks[0].mime_type is None
     assert ("tts.progress", "complete") in progress_events

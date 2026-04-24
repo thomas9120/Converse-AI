@@ -79,6 +79,7 @@ def test_tts_audio_event_carries_latency():
     assert payload["text_chars"] > 0
     assert payload["byte_length"] > 0
     assert payload["turn_id"] == 1
+    assert payload["mime_type"] == "audio/wav"
 
 
 def test_audio_turn_emits_asr_and_llm_events():

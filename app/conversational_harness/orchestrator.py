@@ -16,6 +16,7 @@ class TurnState:
     active_tts_tasks: set[asyncio.Task] = field(default_factory=set)
     system_prompt: str = ""
     turn_id: int = 0
+    tts_tail: asyncio.Task | None = None
 
 
 class ConversationOrchestrator:
@@ -32,6 +33,10 @@ class ConversationOrchestrator:
         self.min_tts_chars = min_tts_chars
         self.state = TurnState()
 
+    def update_turn_config(self, *, tts_chunk_chars: int, min_tts_chars: int) -> None:
+        self.tts_chunk_chars = tts_chunk_chars
+        self.min_tts_chars = min_tts_chars
+
     async def clear_conversation(self) -> None:
         await self.cancel_tts("conversation_clear")
         self.state.messages.clear()
@@ -44,6 +49,7 @@ class ConversationOrchestrator:
         active = [task for task in self.state.active_tts_tasks if not task.done()]
         for task in active:
             task.cancel()
+        self.state.tts_tail = None
         if active:
             await self.sink.emit("tts.cancelled", reason=reason)
 
@@ -132,9 +138,25 @@ class ConversationOrchestrator:
             await self.sink.emit("turn.error", message=str(exc), latency_ms=elapsed_ms(started))
 
     async def _start_tts_chunk(self, text: str, turn_started: float, turn_id: int) -> None:
-        task = asyncio.create_task(self._stream_tts(text, turn_started, turn_id))
+        previous = self.state.tts_tail
+        task = asyncio.create_task(self._stream_tts_after(previous, text, turn_started, turn_id))
+        self.state.tts_tail = task
         self.state.active_tts_tasks.add(task)
         task.add_done_callback(self.state.active_tts_tasks.discard)
+
+    async def _stream_tts_after(
+        self,
+        previous: asyncio.Task | None,
+        text: str,
+        turn_started: float,
+        turn_id: int,
+    ) -> None:
+        if previous is not None:
+            try:
+                await previous
+            except Exception:
+                pass
+        await self._stream_tts(text, turn_started, turn_id)
 
     async def _stream_tts(self, text: str, turn_started: float, turn_id: int) -> None:
         first_chunk_seen = False
@@ -152,6 +174,10 @@ class ConversationOrchestrator:
                 await self.sink.emit(
                     "tts.audio",
                     mime_type=chunk.mime_type,
+                    sample_rate=chunk.sample_rate,
+                    channels=chunk.channels,
+                    encoding=chunk.encoding,
+                    duration_ms=chunk.duration_ms,
                     data=encoded,
                     final=chunk.final,
                     text=text,

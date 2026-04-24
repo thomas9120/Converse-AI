@@ -1,6 +1,7 @@
 from conversational_harness.config import load_config
 from conversational_harness.main import profile_summary
 from conversational_harness.providers import build_providers
+from conversational_harness.tts_runtime import TTSRuntimeManager, load_tts_presets
 
 
 def test_mock_profile_builds_ready_providers():
@@ -49,3 +50,11 @@ def test_profile_summary_includes_runtime_details():
     assert llm["endpoint"] == "http://127.0.0.1:8080"
     assert asr["model"] == "large-v3-turbo"
     assert tts["voice"] == "azelma"
+
+
+def test_tts_presets_load_and_match_default_profile():
+    config = load_config("profiles/llamacpp-local.json")
+    runtime = TTSRuntimeManager(config, load_tts_presets())
+
+    assert runtime.selected_preset.id == "pocket-azelma"
+    assert len(runtime.presets) >= 3

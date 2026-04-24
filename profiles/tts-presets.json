@@ -1,0 +1,67 @@
+{
+  "presets": [
+    {
+      "id": "pocket-azelma",
+      "label": "Pocket TTS",
+      "description": "Pocket TTS on CPU using the azelma voice.",
+      "provider": "pocket-tts",
+      "tts": {
+        "provider": "pocket-tts",
+        "voice": "azelma",
+        "temp": 0.7,
+        "max_tokens": 50,
+        "quantize": false,
+        "coalesce_ms": 400
+      },
+      "turn": {
+        "tts_chunk_chars": 260,
+        "min_tts_chars": 110
+      },
+      "management": {
+        "mode": "in_process"
+      }
+    },
+    {
+      "id": "kyutai-0.75b",
+      "label": "Kyutai 0.75B",
+      "description": "Kyutai 0.75B through the local HTTP wrapper.",
+      "provider": "kyutai-tts-server",
+      "tts": {
+        "provider": "kyutai-tts-server",
+        "base_url": "http://127.0.0.1:8998",
+        "health_path": "/health",
+        "synthesize_path": "/tts",
+        "model": "kyutai/tts-0.75b-en-public",
+        "voice": "default",
+        "timeout_s": 180
+      },
+      "turn": {
+        "tts_chunk_chars": 260
+      },
+      "management": {
+        "mode": "external"
+      }
+    },
+    {
+      "id": "kyutai-1.6b",
+      "label": "Kyutai 1.6B",
+      "description": "Kyutai 1.6B through the local HTTP wrapper.",
+      "provider": "kyutai-tts-server",
+      "tts": {
+        "provider": "kyutai-tts-server",
+        "base_url": "http://127.0.0.1:8998",
+        "health_path": "/health",
+        "synthesize_path": "/tts",
+        "model": "kyutai/tts-1.6b-en_fr",
+        "voice": "default",
+        "timeout_s": 180
+      },
+      "turn": {
+        "tts_chunk_chars": 260
+      },
+      "management": {
+        "mode": "external"
+      }
+    }
+  ]
+}

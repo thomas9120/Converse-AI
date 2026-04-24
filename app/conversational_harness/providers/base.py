@@ -20,6 +20,12 @@ class ProviderStatus:
     ready: bool
     message: str
     capabilities: ProviderCapabilities
+    provider_id: str | None = None
+    selected: bool = False
+    loaded: bool = True
+    managed_externally: bool = False
+    supports_model_management: bool = False
+    supports_voice_selection: bool = False
 
 
 @dataclass(frozen=True)
@@ -31,7 +37,11 @@ class TranscriptEvent:
 @dataclass(frozen=True)
 class AudioChunk:
     data: bytes
-    mime_type: str
+    mime_type: str | None = None
+    sample_rate: int | None = None
+    channels: int = 1
+    encoding: str | None = None
+    duration_ms: int | None = None
     final: bool = False
 
 
@@ -92,6 +102,12 @@ class TTSProvider(Protocol):
         ...
 
     async def check_status(self) -> ProviderStatus:
+        ...
+
+    async def load(self) -> ProviderStatus:
+        ...
+
+    async def unload(self) -> ProviderStatus:
         ...
 
     async def stream_audio(self, text: str) -> AsyncIterator[AudioChunk]:

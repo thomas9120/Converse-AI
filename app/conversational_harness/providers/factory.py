@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from conversational_harness.config import HarnessConfig
-from conversational_harness.providers.base import ASRProvider, LLMProvider, TTSProvider, VADProvider
+from conversational_harness.providers.base import ASRProvider, LLMProvider, ProviderStatus, TTSProvider, VADProvider
 from conversational_harness.providers.faster_whisper import FasterWhisperASRProvider
 from conversational_harness.providers.kyutai_tts_server import KyutaiTTSServerProvider
 from conversational_harness.providers.llamacpp import LlamaCppProvider
@@ -34,15 +35,25 @@ class ProviderBundle:
         return serialize_statuses(items)
 
 
+def serialize_status(item: ProviderStatus) -> dict:
+    return {
+        "name": item.name,
+        "kind": item.kind,
+        "ready": item.ready,
+        "message": item.message,
+        "capabilities": item.capabilities.__dict__,
+        "provider_id": item.provider_id,
+        "selected": item.selected,
+        "loaded": item.loaded,
+        "managed_externally": item.managed_externally,
+        "supports_model_management": item.supports_model_management,
+        "supports_voice_selection": item.supports_voice_selection,
+    }
+
+
 def serialize_statuses(items) -> list[dict]:
     return [
-        {
-            "name": item.name,
-            "kind": item.kind,
-            "ready": item.ready,
-            "message": item.message,
-            "capabilities": item.capabilities.__dict__,
-        }
+        serialize_status(item)
         for item in items
     ]
 
@@ -81,18 +92,27 @@ def build_llm(config: dict) -> LLMProvider:
     return UnavailableProvider("llm", str(provider), f"Unknown LLM provider: {provider}")
 
 
+TTS_PROVIDER_BUILDERS: dict[str, Callable[[dict], TTSProvider]] = {
+    "mock": MockTTSProvider,
+    "kyutai": KyutaiTTSServerProvider,
+    "kyutai-tts-server": KyutaiTTSServerProvider,
+    "pocket-tts": PocketTTSProvider,
+}
+
+
 def build_tts(config: dict) -> TTSProvider:
     provider = config.get("provider", "mock")
-    if provider == "mock":
-        return MockTTSProvider(config)
-    if provider in {"kyutai", "kyutai-tts-server"}:
-        return KyutaiTTSServerProvider(config)
-    if provider == "pocket-tts":
-        return PocketTTSProvider(config)
+    builder = TTS_PROVIDER_BUILDERS.get(str(provider))
+    if builder:
+        return builder(config)
     return UnavailableProvider("tts", str(provider), f"Unknown TTS provider: {provider}")
 
 
-def build_providers(config: HarnessConfig) -> ProviderBundle:
+def build_provider_bundle(
+    config: HarnessConfig,
+    *,
+    tts_provider: TTSProvider | None = None,
+) -> ProviderBundle:
     vad_config = config.section("vad")
     audio_config = config.section("audio")
     vad_config.setdefault("sample_rate", int(audio_config.get("sample_rate", 16000)))
@@ -100,5 +120,9 @@ def build_providers(config: HarnessConfig) -> ProviderBundle:
         vad=build_vad(vad_config),
         asr=build_asr(config.section("asr")),
         llm=build_llm(config.section("llm")),
-        tts=build_tts(config.section("tts")),
+        tts=tts_provider or build_tts(config.section("tts")),
     )
+
+
+def build_providers(config: HarnessConfig) -> ProviderBundle:
+    return build_provider_bundle(config)

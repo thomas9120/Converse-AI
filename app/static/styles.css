@@ -162,6 +162,50 @@ textarea:focus {
   outline: none;
 }
 
+.tts-panel {
+  display: grid;
+  grid-template-columns: 130px minmax(180px, 260px) auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px 12px;
+}
+
+.tts-panel label,
+#tts-runtime-state,
+#tts-runtime-summary {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tts-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#tts-runtime-state[data-mode="loaded"] {
+  color: var(--good);
+  font-weight: 700;
+}
+
+#tts-runtime-state[data-mode="unloaded"] {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+#tts-runtime-state[data-mode="external"] {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+#tts-runtime-state[data-mode="unavailable"] {
+  color: var(--bad);
+  font-weight: 700;
+}
+
 .status-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -394,6 +438,10 @@ input:focus {
   }
 
   .prompt-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .tts-panel {
     grid-template-columns: 1fr;
   }
 

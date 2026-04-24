@@ -22,6 +22,8 @@ class UnavailableProvider(VADProvider, ASRProvider, LLMProvider, TTSProvider):
             ready=False,
             message=message,
             capabilities=ProviderCapabilities(requires_gpu=requires_gpu),
+            provider_id=name,
+            loaded=False,
         )
 
     @property
@@ -53,3 +55,9 @@ class UnavailableProvider(VADProvider, ASRProvider, LLMProvider, TTSProvider):
     async def stream_audio_with_progress(self, text: str, progress=None) -> AsyncIterator[AudioChunk]:
         raise RuntimeError(self._status.message)
         yield
+
+    async def load(self) -> ProviderStatus:
+        return self.status
+
+    async def unload(self) -> ProviderStatus:
+        return self.status
