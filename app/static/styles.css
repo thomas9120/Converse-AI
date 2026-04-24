@@ -422,7 +422,7 @@ select {
 
 .side {
   display: grid;
-  grid-template-rows: auto minmax(96px, 0.8fr) auto minmax(120px, 1.2fr);
+  grid-template-rows: auto minmax(96px, 1fr) auto minmax(60px, 0.5fr);
   gap: 8px;
   overflow: hidden;
   padding: 14px;
