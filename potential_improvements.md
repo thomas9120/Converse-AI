@@ -78,16 +78,6 @@ This divides total buffer bytes by the *last* frame's data length. If frame size
 threading.Thread(target=worker, daemon=True).start()
 ```
 
-A new thread is created for every TTS chunk. Under high throughput or frequent cancellation, threads accumulate. Use a thread pool executor.
-
-### 10. No Graceful Shutdown
-
-The FastAPI app has no lifespan handler. When uvicorn shuts down:
-- Active WebSocket connections are not cleanly closed
-- TTS models loaded in-memory are not freed
-- Background tasks (`_stream_tts_after`) may be orphaned
-
-Add a `lifespan` context manager to `main.py`.
 
 ### 11. Blocking Download in Event Loop via `kokoro_onnx.py:128`
 

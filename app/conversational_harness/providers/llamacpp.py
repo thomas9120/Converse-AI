@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator
 
 import httpx
 
 from conversational_harness.providers.base import LLMProvider, ProviderCapabilities, ProviderStatus
+
+if TYPE_CHECKING:
+    from conversational_harness.runtime_settings import RuntimeSettings
 
 
 class LlamaCppProvider(LLMProvider):
@@ -14,6 +17,10 @@ class LlamaCppProvider(LLMProvider):
         self.model = str(config.get("model", "auto"))
         self.temperature = float(config.get("temperature", 0.7))
         self.max_tokens = int(config.get("max_tokens", 256))
+        self._runtime_settings: RuntimeSettings | None = None
+
+    def set_runtime_settings(self, settings: RuntimeSettings) -> None:
+        self._runtime_settings = settings
 
     @property
     def status(self) -> ProviderStatus:
@@ -94,13 +101,14 @@ class LlamaCppProvider(LLMProvider):
 
     async def stream_response(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
         model = await self.resolve_model()
-        payload = {
+        sampler = self._build_sampler()
+        payload: dict = {
             "model": model,
             "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
             "stream": True,
         }
+        for key, value in sampler.items():
+            payload[key] = value
         url = f"{self.base_url}/v1/chat/completions"
         timeout = httpx.Timeout(connect=3.0, read=60.0, write=10.0, pool=3.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -117,6 +125,15 @@ class LlamaCppProvider(LLMProvider):
                     content = delta.get("content")
                     if content:
                         yield content
+
+    def _build_sampler(self) -> dict:
+        defaults = {
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        if self._runtime_settings is not None:
+            return self._runtime_settings.effective_sampler()
+        return defaults
 
     async def resolve_model(self) -> str:
         if self.model != "auto":

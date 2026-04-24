@@ -4,10 +4,13 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from conversational_harness.events import EventSink
 from conversational_harness.providers.factory import ProviderBundle
+
+if TYPE_CHECKING:
+    from conversational_harness.runtime_settings import RuntimeSettings
 
 
 @dataclass
@@ -26,12 +29,14 @@ class ConversationOrchestrator:
         sink: EventSink,
         tts_chunk_chars: int = 120,
         min_tts_chars: int = 0,
+        runtime_settings: RuntimeSettings | None = None,
     ):
         self.providers = providers
         self.sink = sink
         self.tts_chunk_chars = tts_chunk_chars
         self.min_tts_chars = min_tts_chars
         self.state = TurnState()
+        self._runtime_settings = runtime_settings
 
     def update_turn_config(self, *, tts_chunk_chars: int, min_tts_chars: int) -> None:
         self.tts_chunk_chars = tts_chunk_chars
@@ -193,9 +198,17 @@ class ConversationOrchestrator:
             await self.sink.emit("tts.error", message=str(exc), latency_ms=elapsed_ms(turn_started), text=text)
 
     def _llm_messages(self) -> list[dict[str, str]]:
-        if not self.state.system_prompt:
+        prompt = self._effective_system_prompt()
+        if not prompt:
             return list(self.state.messages)
-        return [{"role": "system", "content": self.state.system_prompt}, *self.state.messages]
+        return [{"role": "system", "content": prompt}, *self.state.messages]
+
+    def _effective_system_prompt(self) -> str:
+        if self._runtime_settings is not None:
+            return self._runtime_settings.effective_system_prompt(self.state.system_prompt)
+        if self.state.system_prompt:
+            return self.state.system_prompt
+        return ""
 
     def _next_turn_id(self) -> int:
         self.state.turn_id += 1
