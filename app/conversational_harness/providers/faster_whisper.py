@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 from conversational_harness.audio import pcm_s16le_to_float32
 from conversational_harness.providers.base import ASRProvider, ProgressCallback, ProviderCapabilities, ProviderStatus, TranscriptEvent
@@ -86,8 +89,10 @@ class FasterWhisperASRProvider(ASRProvider):
 
     def _transcribe_blocking(self, audio, progress: ProgressCallback | None, loop: asyncio.AbstractEventLoop) -> list[str]:
         started = time.perf_counter()
+        logger.info("[ASR] transcribe_blocking called, audio length=%d samples (%.2fs)", audio.size, audio.size / 16000)
         self._emit_progress_threadsafe(loop, progress, "loading", f"Loading faster-whisper model {self.model_name}.")
         self._ensure_model()
+        logger.info("[ASR] model loaded in %.1fs, starting inference on %s/%s", time.perf_counter() - started, self.device, self.compute_type)
         self._emit_progress_threadsafe(
             loop,
             progress,
@@ -101,6 +106,7 @@ class FasterWhisperASRProvider(ASRProvider):
             vad_filter=self.vad_filter,
             initial_prompt=self.initial_prompt,
         )
+        logger.info("[ASR] inference call returned, iterating segments...")
         texts = []
         for segment in segments:
             text = segment.text.strip()
@@ -117,6 +123,7 @@ class FasterWhisperASRProvider(ASRProvider):
                     "segment",
                     f"{prefix}{text}",
                 )
+        logger.info("[ASR] all segments collected in %.1fs, %d segments with text", time.perf_counter() - started, len(texts))
         return texts
 
     def _ensure_model(self) -> None:
@@ -129,6 +136,13 @@ class FasterWhisperASRProvider(ASRProvider):
         except Exception as exc:
             self._load_error = str(exc)
             raise
+
+    async def unload(self) -> ProviderStatus:
+        if self._model is not None:
+            logger.info("[ASR] unloading faster-whisper model (%s/%s)", self.device, self.compute_type)
+            self._model = None
+            self._load_error = None
+        return self.status
 
     def _emit_progress_threadsafe(
         self, loop: asyncio.AbstractEventLoop, progress: ProgressCallback | None, stage: str, message: str

@@ -37,6 +37,9 @@ class MockVADProvider(VADProvider):
     async def process_frame(self, frame) -> list:
         return []
 
+    async def unload(self) -> ProviderStatus:
+        return self.status
+
 
 class MockASRProvider(ASRProvider):
     def __init__(self, config: dict):
@@ -71,6 +74,9 @@ class MockASRProvider(ASRProvider):
         if progress:
             await progress("asr.progress", {"stage": "mock", "message": "Mock ASR transcribing audio."})
         yield TranscriptEvent(text="Mock ASR heard audio input.", final=True)
+
+    async def unload(self) -> ProviderStatus:
+        return self.status
 
 
 class MockLLMProvider(LLMProvider):

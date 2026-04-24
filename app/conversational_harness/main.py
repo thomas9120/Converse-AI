@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -15,10 +17,34 @@ from conversational_harness.orchestrator import ConversationOrchestrator, QueueE
 from conversational_harness.providers.factory import build_provider_bundle, serialize_statuses
 from conversational_harness.tts_runtime import TTSRuntimeManager, load_tts_presets
 
+logger = logging.getLogger(__name__)
 
 STATIC_ROOT = PROJECT_ROOT / "app" / "static"
 
-app = FastAPI(title="Conversational AI Harness")
+BASE_CONFIG = load_config()
+TTS_MANAGER = TTSRuntimeManager(BASE_CONFIG, load_tts_presets())
+ACTIVE_QUEUES: set[asyncio.Queue[dict[str, Any]]] = set()
+TTS_CANCEL_HOOKS: set[Any] = set()
+TURN_CONFIG_HOOKS: set[Any] = set()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    logger.info("Shutting down: cleaning up providers and active connections.")
+    await cancel_active_tts("shutdown")
+    providers = build_provider_bundle(BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider())
+    for provider in (providers.vad, providers.asr, providers.llm, providers.tts):
+        try:
+            if hasattr(provider, "unload"):
+                await provider.unload()
+        except Exception:
+            pass
+    for queue in list(ACTIVE_QUEUES):
+        ACTIVE_QUEUES.discard(queue)
+
+
+app = FastAPI(title="Conversational AI Harness", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 
 BASE_CONFIG = load_config()
@@ -192,8 +218,11 @@ async def websocket_events(websocket: WebSocket) -> None:
         expected_channels=int(audio_config.get("channels", 1)),
         expected_frame_ms=int(audio_config.get("frame_ms", 30)),
     )
+    vad_config = BASE_CONFIG.section("vad")
+    min_speech_duration_ms = int(vad_config.get("min_speech_duration_ms", 0))
     pre_speech_frames = int(audio_config.get("pre_speech_ms", 450)) // audio_stats.expected_frame_ms
     max_utterance_frames = int(audio_config.get("max_utterance_ms", 30000)) // audio_stats.expected_frame_ms
+    bytes_per_ms = audio_stats.expected_sample_rate * 2 // 1000
     pre_buffer: deque[bytes] = deque(maxlen=max(1, pre_speech_frames))
     utterance_buffer = bytearray()
     recording_utterance = False
@@ -309,6 +338,15 @@ async def websocket_events(websocket: WebSocket) -> None:
                             probability=vad_event.probability,
                             audio_ms=vad_event.audio_ms,
                         )
+                        if min_speech_duration_ms > 0 and pcm:
+                            duration_ms = len(pcm) // max(bytes_per_ms, 1)
+                            if duration_ms < min_speech_duration_ms:
+                                await sink.emit(
+                                    "vad.speech_rejected",
+                                    duration_ms=duration_ms,
+                                    min_duration_ms=min_speech_duration_ms,
+                                )
+                                pcm = b""
                         if pcm and (not active_turn or active_turn.done()):
                             orchestrator.providers.tts = TTS_MANAGER.get_provider()
                             active_turn = asyncio.create_task(
