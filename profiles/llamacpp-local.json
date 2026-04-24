@@ -21,7 +21,7 @@
     "compute_type": "int8",
     "language": "en",
     "beam_size": 1,
-    "vad_filter": false,
+    "vad_filter": true,
     "timeout_s": 180
   },
   "llm": {
