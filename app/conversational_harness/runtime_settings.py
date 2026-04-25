@@ -77,6 +77,10 @@ class CharacterCard:
             return header + "\n\n" + "\n\n".join(parts)
         return header
 
+    def first_message(self, user_name: str, ai_name: str) -> str:
+        char_name = self.name or ai_name
+        return self.first_mes.replace("{{user}}", user_name).replace("{{char}}", char_name).strip()
+
 
 def _parse_character_card(data: dict[str, Any]) -> CharacterCard:
     spec = data.get("data", data)

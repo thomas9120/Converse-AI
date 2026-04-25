@@ -334,6 +334,8 @@ function handleEvent(event) {
     conversationEl.innerHTML = "";
     latencyEl.innerHTML = "";
     addSystemMessage("Conversation cleared");
+  } else if (event.type === "conversation.seeded") {
+    addMessage(payload.role || "assistant", payload.text || "");
   } else if (event.type === "settings.updated") {
     applySettings(payload);
   }

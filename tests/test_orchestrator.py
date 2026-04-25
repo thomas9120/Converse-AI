@@ -3,6 +3,7 @@ import asyncio
 from conversational_harness.config import load_config
 from conversational_harness.orchestrator import ConversationOrchestrator, QueueEventSink, should_flush_tts
 from conversational_harness.providers import build_providers
+from conversational_harness.runtime_settings import CharacterCard, RuntimeSettings
 
 
 class RecordingLLM:
@@ -141,6 +142,59 @@ def test_no_system_prompt_is_sent_when_unset():
     messages = asyncio.run(run_turn())
 
     assert messages == [{"role": "user", "content": "hello harness"}]
+
+
+def test_character_first_message_seeds_empty_conversation():
+    async def run_seed():
+        config = load_config("profiles/mock-local.json")
+        providers = build_providers(config)
+        queue = asyncio.Queue()
+        settings = RuntimeSettings(
+            user_name="Mara",
+            ai_name="Assistant",
+            character=CharacterCard(name="Lyra", first_mes="Hello, {{user}}. I am {{char}}."),
+        )
+        orchestrator = ConversationOrchestrator(
+            providers,
+            QueueEventSink(queue),
+            tts_chunk_chars=60,
+            runtime_settings=settings,
+        )
+
+        seeded = await orchestrator.seed_character_first_message()
+        event = await queue.get()
+        return seeded, orchestrator.state.messages, event
+
+    seeded, messages, event = asyncio.run(run_seed())
+
+    assert seeded is True
+    assert messages == [{"role": "assistant", "content": "Hello, Mara. I am Lyra."}]
+    assert event["type"] == "conversation.seeded"
+    assert event["payload"] == {"role": "assistant", "text": "Hello, Mara. I am Lyra."}
+
+
+def test_character_first_message_seed_is_noop_when_history_exists():
+    async def run_seed():
+        config = load_config("profiles/mock-local.json")
+        providers = build_providers(config)
+        queue = asyncio.Queue()
+        settings = RuntimeSettings(character=CharacterCard(name="Lyra", first_mes="Hello."))
+        orchestrator = ConversationOrchestrator(
+            providers,
+            QueueEventSink(queue),
+            tts_chunk_chars=60,
+            runtime_settings=settings,
+        )
+        orchestrator.state.messages.append({"role": "user", "content": "Already here"})
+
+        seeded = await orchestrator.seed_character_first_message()
+        return seeded, orchestrator.state.messages, queue.empty()
+
+    seeded, messages, no_events = asyncio.run(run_seed())
+
+    assert seeded is False
+    assert messages == [{"role": "user", "content": "Already here"}]
+    assert no_events is True
 
 
 def test_clear_conversation_removes_history():
