@@ -60,11 +60,14 @@
         "voices_filename": "voices-v1.0.bin",
         "model_url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx",
         "voices_url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
-        "timeout_s": 300
+        "timeout_s": 300,
+        "onnx_intra_op_num_threads": 4,
+        "onnx_inter_op_num_threads": 1,
+        "preload_g2p": true
       },
       "turn": {
-        "tts_chunk_chars": 260,
-        "min_tts_chars": 110
+        "tts_chunk_chars": 120,
+        "min_tts_chars": 45
       },
       "management": {
         "mode": "in_process"
