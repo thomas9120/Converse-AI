@@ -17,9 +17,20 @@ fi
 
 for pid in $pids; do
   command_line="$(ps -p "$pid" -o command= || true)"
-  if printf '%s' "$command_line" | grep -Eq 'conversational_harness.main:app|uvicorn'; then
+  if printf '%s' "$command_line" | grep -q 'conversational_harness.main:app'; then
+    echo "Asking harness process $pid on port $port to shut down gracefully..."
     kill "$pid"
-    echo "Stopped harness server process $pid on port $port."
+    for _ in 1 2 3 4 5; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Graceful shutdown timed out. Force stopping process $pid."
+      kill -9 "$pid"
+    fi
+    echo "Stopped harness server process $pid."
   else
     echo "Port $port is used by PID $pid; command did not look like this harness, so it was left running." >&2
   fi
