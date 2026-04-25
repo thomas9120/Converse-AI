@@ -39,6 +39,7 @@ TTS_MANAGER = TTSRuntimeManager(BASE_CONFIG, load_tts_presets())
 ACTIVE_QUEUES: set[asyncio.Queue[dict[str, Any]]] = set()
 TTS_CANCEL_HOOKS: set[Any] = set()
 TURN_CONFIG_HOOKS: set[Any] = set()
+CHARACTER_SEED_HOOKS: set[Any] = set()
 
 
 @asynccontextmanager
@@ -67,6 +68,7 @@ RUNTIME_SETTINGS = load_runtime_settings(BASE_CONFIG.section("llm"))
 ACTIVE_QUEUES: set[asyncio.Queue[dict[str, Any]]] = set()
 TTS_CANCEL_HOOKS: set[Any] = set()
 TURN_CONFIG_HOOKS: set[Any] = set()
+CHARACTER_SEED_HOOKS: set[Any] = set()
 
 
 async def _fetch_llm_server_defaults() -> None:
@@ -166,6 +168,7 @@ async def import_character(payload: dict[str, Any]) -> dict[str, Any]:
     RUNTIME_SETTINGS.set_character(card)
     save_runtime_settings(RUNTIME_SETTINGS)
     await broadcast_settings()
+    await seed_character_first_messages()
     return RUNTIME_SETTINGS.to_dict()
 
 
@@ -200,6 +203,7 @@ async def upload_character(payload: dict[str, Any]) -> dict[str, Any]:
     RUNTIME_SETTINGS.set_character(card)
     save_runtime_settings(RUNTIME_SETTINGS)
     await broadcast_settings()
+    await seed_character_first_messages()
     return RUNTIME_SETTINGS.to_dict()
 
 
@@ -309,6 +313,11 @@ async def refresh_turn_config() -> None:
         hook(config)
 
 
+async def seed_character_first_messages() -> None:
+    for hook in list(CHARACTER_SEED_HOOKS):
+        await hook()
+
+
 @app.websocket("/ws/events")
 async def websocket_events(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -344,6 +353,9 @@ async def websocket_events(websocket: WebSocket) -> None:
     async def cancel_hook(reason: str) -> None:
         await orchestrator.cancel_tts(reason)
 
+    async def seed_hook() -> None:
+        await orchestrator.seed_character_first_message()
+
     def turn_config_hook(config: dict[str, Any]) -> None:
         orchestrator.update_turn_config(
             tts_chunk_chars=int(config.get("tts_chunk_chars", 120)),
@@ -353,6 +365,8 @@ async def websocket_events(websocket: WebSocket) -> None:
 
     TTS_CANCEL_HOOKS.add(cancel_hook)
     TURN_CONFIG_HOOKS.add(turn_config_hook)
+    CHARACTER_SEED_HOOKS.add(seed_hook)
+    await orchestrator.seed_character_first_message()
 
     async def sender() -> None:
         raw = await merged_profile_raw()
@@ -495,3 +509,4 @@ async def websocket_events(websocket: WebSocket) -> None:
         ACTIVE_QUEUES.discard(queue)
         TTS_CANCEL_HOOKS.discard(cancel_hook)
         TURN_CONFIG_HOOKS.discard(turn_config_hook)
+        CHARACTER_SEED_HOOKS.discard(seed_hook)

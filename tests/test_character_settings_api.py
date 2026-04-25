@@ -37,11 +37,18 @@ def encode_json_card(card: dict) -> str:
 def test_direct_json_character_import_succeeds(client):
     response = client.post(
         "/api/settings/character",
-        json={"character": {"name": "Safety Bot", "description": "Keeps the harness steady."}},
+        json={
+            "character": {
+                "name": "Safety Bot",
+                "description": "Keeps the harness steady.",
+                "first_mes": "Boot sequence ready.",
+            },
+        },
     )
 
     assert response.status_code == 200
     assert response.json()["character"]["name"] == "Safety Bot"
+    assert response.json()["character"]["first_mes"] == "Boot sequence ready."
 
 
 def test_valid_json_character_upload_succeeds(client):
@@ -49,12 +56,15 @@ def test_valid_json_character_upload_succeeds(client):
         "/api/settings/character/upload",
         json={
             "filename": "safety-bot.json",
-            "data": encode_json_card({"name": "Safety Bot", "personality": "Careful"}),
+            "data": encode_json_card(
+                {"name": "Safety Bot", "personality": "Careful", "first_mes": "All checks are green."}
+            ),
         },
     )
 
     assert response.status_code == 200
     assert response.json()["character"]["name"] == "Safety Bot"
+    assert response.json()["character"]["first_mes"] == "All checks are green."
 
 
 def test_character_upload_rejects_invalid_base64(client):

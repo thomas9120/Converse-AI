@@ -47,6 +47,22 @@ class ConversationOrchestrator:
         self.state.messages.clear()
         await self.sink.emit("conversation.cleared")
 
+    async def seed_character_first_message(self) -> bool:
+        if self._runtime_settings is None or self._runtime_settings.character is None:
+            return False
+        # First messages start empty chats, but should never overwrite an active conversation.
+        if self.state.messages:
+            return False
+        text = self._runtime_settings.character.first_message(
+            self._runtime_settings.display_name_user(),
+            self._runtime_settings.display_name_ai(),
+        )
+        if not text:
+            return False
+        self.state.messages.append({"role": "assistant", "content": text})
+        await self.sink.emit("conversation.seeded", role="assistant", text=text)
+        return True
+
     def set_system_prompt(self, prompt: str) -> None:
         self.state.system_prompt = prompt.strip()
 

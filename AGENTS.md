@@ -104,6 +104,7 @@ This project is intended to become a local, modular conversational AI harness fo
 - The `ConversationOrchestrator` receives a `RuntimeSettings` reference and delegates system prompt construction to `effective_system_prompt()`, which layers: character card (or name header) → additional instructions → manual textarea.
 - Settings changes are broadcast to all connected WebSocket clients via `settings.updated` events, so multiple tabs stay in sync.
 - When a character card is loaded, its `description`, `personality`, `scenario`, and `mes_example` fields are assembled into the system prompt. The user can still add extra instructions via the additional system prompt textarea or the manual prompt on the Chat tab.
+- TavernAI `first_mes` is conversation seed history, not system prompt text. Insert it as the assistant's first chat message with `{{user}}`/`{{char}}` substitution only when the conversation is empty, and do not auto-play TTS for that seed.
 - TavernAI V2 character cards can come as PNG files (with base64-encoded JSON in a `tEXt` chunk under key `chara`) or standalone JSON. The PNG parser is hand-written (no Pillow dependency) and scans chunks for the `chara` keyword.
 
 ## Continue Feature
