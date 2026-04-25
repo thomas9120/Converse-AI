@@ -39,6 +39,16 @@ class BrokenG2P:
         raise RuntimeError("boom")
 
 
+class CountingKokoroProvider(KokoroOnnxProvider):
+    def __init__(self, config):
+        super().__init__(config)
+        self.g2p_loads = 0
+
+    def _ensure_g2p(self):
+        self.g2p_loads += 1
+        return super()._ensure_g2p()
+
+
 def test_build_tts_returns_kokoro_provider():
     provider = build_tts({"provider": "kokoro-onnx", "voice": "af_heart", "_model": FakeKokoroModel()})
 
@@ -52,7 +62,8 @@ def test_kokoro_onnx_streams_pcm_with_progress():
             "_g2p": FakeG2P(),
             "voice": "af_heart",
             "lang": "en-us",
-            "speed": 1.0,
+            "speed": 1.25,
+            "trim": False,
         }
     )
 
@@ -60,7 +71,7 @@ def test_kokoro_onnx_streams_pcm_with_progress():
         progress_events = []
 
         async def progress(event_type, payload):
-            progress_events.append((event_type, payload["stage"]))
+            progress_events.append((event_type, payload))
 
         chunks = []
         async for chunk in provider.stream_audio_with_progress("Hello there.", progress):
@@ -77,11 +88,17 @@ def test_kokoro_onnx_streams_pcm_with_progress():
     assert chunks[0].channels == 1
     assert chunks[0].final is False
     assert chunks[1].final is True
-    assert ("tts.progress", "phonemizing") in progress_events
-    assert ("tts.progress", "complete") in progress_events
+    stages = [(event_type, payload["stage"]) for event_type, payload in progress_events]
+    assert ("tts.progress", "phonemizing") in stages
+    assert ("tts.progress", "complete") in stages
+    assert any(payload["stage"] == "chunk" and payload["first_chunk"] for _, payload in progress_events)
+    assert all("elapsed_ms" in payload for _, payload in progress_events)
     assert provider._model.calls[0]["voice"] == "af_heart"
     assert provider._model.calls[0]["is_phonemes"] is True
     assert provider._model.calls[0]["text"] == "həlˈO"
+    assert provider._model.calls[0]["speed"] == 1.25
+    assert provider._model.calls[0]["lang"] == "en-us"
+    assert provider._model.calls[0]["trim"] is False
     assert provider.status.capabilities.supports_streaming_tts is True
 
 
@@ -104,3 +121,35 @@ def test_kokoro_onnx_raises_clear_error_when_misaki_fails():
 
     with pytest.raises(RuntimeError, match="Misaki English phonemization failed: boom"):
         asyncio.run(run())
+
+
+def test_kokoro_preloads_g2p_during_load_for_english():
+    provider = CountingKokoroProvider(
+        {
+            "_model": FakeKokoroModel(),
+            "_g2p": FakeG2P(),
+            "voice": "af_heart",
+            "lang": "en-us",
+            "preload_g2p": True,
+        }
+    )
+
+    asyncio.run(provider.load())
+
+    assert provider.g2p_loads == 1
+
+
+def test_kokoro_onnx_tuning_config_is_accepted_with_fake_model():
+    provider = KokoroOnnxProvider(
+        {
+            "_model": FakeKokoroModel(),
+            "_g2p": FakeG2P(),
+            "voice": "af_heart",
+            "lang": "en-us",
+            "onnx_intra_op_num_threads": 4,
+            "onnx_inter_op_num_threads": 1,
+        }
+    )
+
+    assert provider.onnx_intra_op_num_threads == 4
+    assert provider.onnx_inter_op_num_threads == 1

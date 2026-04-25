@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import AsyncIterator
@@ -35,6 +36,9 @@ class KokoroOnnxProvider(TTSProvider):
         self.voices_filename = str(config.get("voices_filename", "voices-v1.0.bin"))
         self.model_url = str(config.get("model_url", DEFAULT_KOKORO_MODEL_URL))
         self.voices_url = str(config.get("voices_url", DEFAULT_KOKORO_VOICES_URL))
+        self.onnx_intra_op_num_threads = int(config.get("onnx_intra_op_num_threads", 4))
+        self.onnx_inter_op_num_threads = int(config.get("onnx_inter_op_num_threads", 1))
+        self.preload_g2p = bool(config.get("preload_g2p", True))
         self._model = config.get("_model")
         self._g2p = config.get("_g2p")
         self._load_error: str | None = None
@@ -102,6 +106,8 @@ class KokoroOnnxProvider(TTSProvider):
     async def load(self) -> ProviderStatus:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._ensure_model)
+        if self.preload_g2p and self._should_use_misaki():
+            await loop.run_in_executor(None, self._ensure_g2p)
         return self.status
 
     async def unload(self) -> ProviderStatus:
@@ -124,19 +130,20 @@ class KokoroOnnxProvider(TTSProvider):
         self, text: str, progress: ProgressCallback | None = None
     ) -> AsyncIterator[AudioChunk]:
         loop = asyncio.get_running_loop()
-        self._emit_progress(loop, progress, "loading", f"Loading Kokoro voice '{self.voice}'.")
+        started = time.perf_counter()
+        self._emit_progress(loop, progress, "loading", f"Loading Kokoro voice '{self.voice}'.", started=started)
         await loop.run_in_executor(None, self._ensure_model)
-        self._emit_progress(loop, progress, "loaded", "Kokoro ready.")
+        self._emit_progress(loop, progress, "loaded", "Kokoro ready.", started=started)
 
         async with self._generation_lock:
             stream_text = text
             is_phonemes = False
             if self._should_use_misaki():
-                self._emit_progress(loop, progress, "phonemizing", "Preparing English phonemes with Misaki.")
+                self._emit_progress(loop, progress, "phonemizing", "Preparing English phonemes with Misaki.", started=started)
                 stream_text = await loop.run_in_executor(None, self._phonemize_english, text)
                 is_phonemes = True
 
-            self._emit_progress(loop, progress, "generating", "Generating speech.")
+            self._emit_progress(loop, progress, "generating", "Generating speech.", started=started)
             index = 0
             previous_chunk: AudioChunk | None = None
             async for audio, sample_rate in self._model.create_stream(
@@ -159,14 +166,23 @@ class KokoroOnnxProvider(TTSProvider):
                     duration_ms=int((len(pcm_bytes) // 2) * 1000 / sample_rate) if sample_rate else None,
                     final=False,
                 )
-                self._emit_progress(loop, progress, "chunk", f"Generated audio chunk {index}.")
+                self._emit_progress(
+                    loop,
+                    progress,
+                    "chunk",
+                    f"Generated audio chunk {index}.",
+                    started=started,
+                    chunk_index=index,
+                    first_chunk=index == 1,
+                    duration_ms=current_chunk.duration_ms,
+                )
                 if previous_chunk is not None:
                     yield previous_chunk
                 previous_chunk = current_chunk
 
             if previous_chunk is not None:
                 yield replace(previous_chunk, final=True)
-            self._emit_progress(loop, progress, "complete", "TTS complete.")
+            self._emit_progress(loop, progress, "complete", "TTS complete.", started=started, chunks=index)
 
     def _ensure_model(self) -> None:
         if self._model is not None:
@@ -176,8 +192,24 @@ class KokoroOnnxProvider(TTSProvider):
         from kokoro_onnx import Kokoro
 
         self._model = Kokoro(str(model_path), str(voices_path))
+        self._apply_onnx_session_options(str(model_path))
         self._load_error = None
         self._g2p_error = None
+
+    def _apply_onnx_session_options(self, model_path: str) -> None:
+        if self.onnx_intra_op_num_threads <= 0 and self.onnx_inter_op_num_threads <= 0:
+            return
+        if not hasattr(self._model, "sess"):
+            return
+        import onnxruntime as ort
+
+        options = ort.SessionOptions()
+        if self.onnx_intra_op_num_threads > 0:
+            options.intra_op_num_threads = self.onnx_intra_op_num_threads
+        if self.onnx_inter_op_num_threads > 0:
+            options.inter_op_num_threads = self.onnx_inter_op_num_threads
+        providers = ["CPUExecutionProvider"]
+        self._model.sess = ort.InferenceSession(model_path, sess_options=options, providers=providers)
 
     def _ensure_g2p(self):
         if self._g2p is not None:
@@ -231,7 +263,13 @@ class KokoroOnnxProvider(TTSProvider):
         progress: ProgressCallback | None,
         stage: str,
         message: str,
+        *,
+        started: float | None = None,
+        **extra,
     ) -> None:
         if not progress:
             return
-        loop.call_soon_threadsafe(asyncio.create_task, progress("tts.progress", {"stage": stage, "message": message}))
+        payload = {"stage": stage, "message": message, **extra}
+        if started is not None:
+            payload["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+        loop.call_soon_threadsafe(asyncio.create_task, progress("tts.progress", payload))

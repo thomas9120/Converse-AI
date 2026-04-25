@@ -108,6 +108,14 @@ $env:HARNESS_PROFILE="profiles/llamacpp-kokoro-onnx.json"
 
 Kokoro uses local ONNX files and downloads the current v1.0 assets on first use into `model-cache/kokoro`. The runtime TTS selector in the web UI can switch between Pocket TTS and Kokoro without restarting the harness.
 
+Kokoro is tuned separately from Pocket TTS because its CPU ONNX path benefits from shorter phrase chunks. The Kokoro profile and preset use lower `tts_chunk_chars` / `min_tts_chars` values, prewarm English G2P on model load, and expose optional CPU threading controls:
+
+```json
+"onnx_intra_op_num_threads": 4,
+"onnx_inter_op_num_threads": 1,
+"preload_g2p": true
+```
+
 ## Settings Tab
 
 The UI has a Settings tab (next to Chat in the topbar) with three sections:
