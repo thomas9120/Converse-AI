@@ -64,6 +64,12 @@ This project is intended to become a local, modular conversational AI harness fo
 - Keep profiles small and readable. A user should be able to understand which ASR, LLM, TTS, VAD, model paths, and device settings are active.
 - Put fallbacks in config/profile selection, not hidden catch-all exception paths.
 
+## Security/Robustness Notes
+
+- Treat provider status, profile fields, model IDs, backend error messages, and character card content as untrusted UI text. Render them with `textContent`, not `innerHTML`.
+- Validate and size-limit base64 uploads before parsing. Character cards are prompt metadata, so large payloads should fail with clear 400 responses instead of being decoded unbounded.
+- Await cancelled realtime turn tasks before starting replacement turns so stale LLM/TTS streams cannot race into the next user turn.
+
 ## Testing Guidelines
 
 - Include canned audio tests for VAD and ASR so regressions do not require live microphone input.

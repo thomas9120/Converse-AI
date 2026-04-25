@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import json
 import logging
+import struct
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +31,8 @@ from conversational_harness.tts_runtime import TTSRuntimeManager, load_tts_prese
 logger = logging.getLogger(__name__)
 
 STATIC_ROOT = PROJECT_ROOT / "app" / "static"
+MAX_CHARACTER_UPLOAD_BYTES = 2 * 1024 * 1024
+MAX_CHARACTER_UPLOAD_BASE64_CHARS = ((MAX_CHARACTER_UPLOAD_BYTES + 2) // 3) * 4
 
 BASE_CONFIG = load_config()
 TTS_MANAGER = TTSRuntimeManager(BASE_CONFIG, load_tts_presets())
@@ -167,16 +173,28 @@ async def import_character(payload: dict[str, Any]) -> dict[str, Any]:
 async def upload_character(payload: dict[str, Any]) -> dict[str, Any]:
     file_data = payload.get("data")
     filename = str(payload.get("filename", "")).lower()
-    if not file_data:
+    if not isinstance(file_data, str) or not file_data:
         raise HTTPException(status_code=400, detail="file data is required")
-    import base64 as b64
-    raw = b64.b64decode(file_data)
-    if filename.endswith(".png"):
-        card = parse_character_png(raw)
-    elif filename.endswith(".json"):
-        card = parse_character_json(raw.decode("utf-8"))
-    else:
+    if not (filename.endswith(".png") or filename.endswith(".json")):
         raise HTTPException(status_code=400, detail="Unsupported file type. Use .png or .json")
+    # Keep character card uploads small; they are prompt metadata, not model assets.
+    if len(file_data) > MAX_CHARACTER_UPLOAD_BASE64_CHARS:
+        raise HTTPException(status_code=400, detail="Character card upload is too large")
+    try:
+        raw = base64.b64decode(file_data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="file data must be valid base64") from exc
+    if len(raw) > MAX_CHARACTER_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Character card upload is too large")
+    try:
+        if filename.endswith(".png"):
+            card = parse_character_png(raw)
+        else:
+            card = parse_character_json(raw.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Character JSON must be valid UTF-8") from exc
+    except (json.JSONDecodeError, ValueError, IndexError, struct.error) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid character card: {exc}") from exc
     if not card.name:
         raise HTTPException(status_code=400, detail="Character card must have a name")
     RUNTIME_SETTINGS.set_character(card)
@@ -356,6 +374,15 @@ async def websocket_events(websocket: WebSocket) -> None:
     async def receiver() -> None:
         nonlocal recording_utterance
         active_turn: asyncio.Task | None = None
+        # Await cancellation before replacing turns so stale streams cannot race the next turn.
+        async def cancel_active_turn(reason: str) -> None:
+            nonlocal active_turn
+            if active_turn and not active_turn.done():
+                active_turn.cancel()
+                with suppress(asyncio.CancelledError):
+                    await active_turn
+                await sink.emit("turn.cancelled", reason=reason)
+
         while True:
             message = await websocket.receive_json()
             message_type = message.get("type")
@@ -366,23 +393,17 @@ async def websocket_events(websocket: WebSocket) -> None:
                 if not text:
                     continue
                 orchestrator.providers.tts = TTS_MANAGER.get_provider()
-                if active_turn and not active_turn.done():
-                    active_turn.cancel()
-                    await sink.emit("turn.cancelled", reason="new_user_text")
+                await cancel_active_turn("new_user_text")
                 active_turn = asyncio.create_task(orchestrator.handle_text_turn(text))
             elif message_type == "user.continue":
                 orchestrator.providers.tts = TTS_MANAGER.get_provider()
-                if active_turn and not active_turn.done():
-                    active_turn.cancel()
-                    await sink.emit("turn.cancelled", reason="continue")
+                await cancel_active_turn("continue")
                 active_turn = asyncio.create_task(orchestrator.handle_continue())
             elif message_type == "system_prompt.update":
                 orchestrator.set_system_prompt(str(payload.get("system_prompt", "")))
                 await sink.emit("system_prompt.updated", enabled=bool(orchestrator.state.system_prompt))
             elif message_type == "conversation.clear":
-                if active_turn and not active_turn.done():
-                    active_turn.cancel()
-                    await sink.emit("turn.cancelled", reason="conversation_clear")
+                await cancel_active_turn("conversation_clear")
                 await orchestrator.clear_conversation()
             elif message_type == "tts.cancel":
                 await orchestrator.cancel_tts("manual")
