@@ -123,12 +123,19 @@ function renderProviders(providers, summary = []) {
     const node = document.createElement("article");
     node.className = "provider";
     node.dataset.ready = provider.ready ? "true" : "false";
-    node.innerHTML = `
-      <strong>${provider.kind}: ${provider.name}</strong>
-      <span>${provider.ready ? "ready" : "not ready"}</span>
-      ${detailText ? `<p>${detailText}</p>` : ""}
-      <p>${provider.message}</p>
-    `;
+    const title = document.createElement("strong");
+    title.textContent = `${provider.kind}: ${provider.name}`;
+    const ready = document.createElement("span");
+    ready.textContent = provider.ready ? "ready" : "not ready";
+    node.append(title, ready);
+    if (detailText) {
+      const detailsNode = document.createElement("p");
+      detailsNode.textContent = detailText;
+      node.appendChild(detailsNode);
+    }
+    const message = document.createElement("p");
+    message.textContent = provider.message;
+    node.appendChild(message);
     providersEl.appendChild(node);
   }
 }
