@@ -93,21 +93,6 @@ Keep future work modular: each VAD, ASR, LLM, and TTS backend should stay behind
 - Pocket TTS already supports streaming in this codebase through `TTSModel.generate_audio_stream(...)`; future work should focus on buffering and latency tuning rather than adding streaming from scratch.
 - Keep the runtime TTS preset switcher generic so future engines can still slot in through a provider adapter plus preset metadata.
 
-### Kyutai STT
-
-- Research the cleanest provider boundary for Kyutai STT.
-  - PyTorch provider for experimentation.
-  - Rust/moshi-server provider for production-style streaming.
-  - MLX provider only for Apple Silicon profiles.
-- Keep faster-whisper as the default working ASR until Kyutai STT is locally proven.
-- Add profiles for Kyutai STT without making it mandatory for startup.
-- Compare Kyutai STT against faster-whisper large-v3-turbo on:
-  - first partial/final latency,
-  - accuracy on short conversational utterances,
-  - punctuation,
-  - word timestamps,
-  - GPU/CPU memory pressure.
-
 ### CUDA ASR
 
 - Fix the CUDA faster-whisper profile so CTranslate2 can load CUDA runtime DLLs on Windows.

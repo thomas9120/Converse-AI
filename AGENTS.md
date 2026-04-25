@@ -3,7 +3,7 @@
 This project is intended to become a local, modular conversational AI harness for realtime voice interaction. Keep implementation choices boring, swappable, and measurable. The main stack direction is:
 
 - VAD: Silero VAD, preferably ONNX on CPU.
-- ASR: Kyutai STT first, with Whisper/faster-whisper style fallbacks.
+- ASR: faster-whisper first, with other STT backends added only behind provider interfaces when locally proven.
 - LLM: llama.cpp server first, with CUDA default and Vulkan treated as experimental.
 - TTS: Pocket TTS and Kokoro ONNX as the primary local CPU options.
 - UI: local desktop/web app launched by plain scripts.

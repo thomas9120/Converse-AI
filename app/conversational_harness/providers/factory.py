@@ -71,13 +71,6 @@ def build_asr(config: dict) -> ASRProvider:
     provider = config.get("provider", "mock")
     if provider == "mock":
         return MockASRProvider(config)
-    if provider == "kyutai":
-        return UnavailableProvider(
-            "asr",
-            "kyutai-stt",
-            "Kyutai STT requires a configured PyTorch, MLX, or moshi-server streaming adapter.",
-            requires_gpu=True,
-        )
     if provider == "faster-whisper":
         return FasterWhisperASRProvider(config)
     return UnavailableProvider("asr", str(provider), f"Unknown ASR provider: {provider}")
