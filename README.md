@@ -164,10 +164,25 @@ The Chat tab has a "Continue" button next to Send. When the LLM response is cut 
 
 ## Scripts
 
-- `install.*`: creates `.venv` and installs Python dependencies.
-- `start.*`: launches the local web/backend server. Adds NVIDIA bin dirs to PATH for CUDA ASR.
-- `stop.*`: stops this harness if it is listening on port `7860`. Tries graceful shutdown first, force-kills after 5 seconds.
+- `install.*`: verifies Python 3.11+, creates or reuses `.venv`, installs Python dependencies, and prints next steps.
+- `start.*`: launches the local web/backend server in the foreground. It honors `HARNESS_PROFILE` and `HARNESS_PORT`, refuses to start if the target port is already occupied, and prints the local URL. Windows also adds NVIDIA package bin directories from `.venv` to `PATH` for CUDA ASR.
+- `stop.*`: stops this harness if it is listening on `HARNESS_PORT` (default `7860`). It leaves unrelated processes alone and force-stops only if graceful shutdown times out.
 - `doctor.*`: checks Python, optional GPU tooling, optional llama.cpp server, and profile status.
+- `update.*`: updates this checkout from `origin/main` only. It refuses to run with uncommitted changes, uses fast-forward-only merge behavior, and reinstalls requirements when `requirements.txt` changed.
+
+Examples:
+
+```powershell
+.\start.ps1 -Port 7861 -Profile profiles/mock-local.json
+.\update.ps1
+```
+
+```bash
+HARNESS_PORT=7861 HARNESS_PROFILE=profiles/mock-local.json ./start.sh
+./update.sh
+```
+
+The update scripts intentionally do not pull from the current branch if it is `Beta` or another working branch; `origin/main` is the only update source.
 
 ## Profiles
 

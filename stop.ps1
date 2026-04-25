@@ -1,11 +1,14 @@
+param(
+  [int]$Port = $(if ($env:HARNESS_PORT) { [int]$env:HARNESS_PORT } else { 7860 })
+)
+
 $ErrorActionPreference = "Stop"
 
-$port = 7860
-$connections = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
+$connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 $pids = $connections | Select-Object -ExpandProperty OwningProcess -Unique
 
 if (-not $pids) {
-  Write-Host "No harness server is listening on port $port."
+  Write-Host "No harness server is listening on port $Port."
   exit 0
 }
 
@@ -22,8 +25,8 @@ foreach ($processId in $pids) {
     $commandLine = ""
   }
 
-  if ($commandLine -like "*conversational_harness.main:app*" -or $commandLine -like "*uvicorn*") {
-    Write-Host "Asking harness process $processId on port $port to shut down gracefully..."
+  if ($commandLine -like "*conversational_harness.main:app*") {
+    Write-Host "Asking harness process $processId on port $Port to shut down gracefully..."
     try {
       Stop-Process -Id $processId
       $process.WaitForExit(5000)
@@ -35,6 +38,6 @@ foreach ($processId in $pids) {
     }
     Write-Host "Stopped harness server process $processId."
   } else {
-    Write-Warning "Port $port is used by PID $processId ($($process.ProcessName)); command did not look like this harness, so it was left running."
+    Write-Warning "Port $Port is used by PID $processId ($($process.ProcessName)); command did not look like this harness, so it was left running."
   }
 }
