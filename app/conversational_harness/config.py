@@ -23,7 +23,7 @@ class HarnessConfig:
     def section(self, name: str) -> dict[str, Any]:
         value = self.raw.get(name, {})
         if isinstance(value, dict):
-            return value
+            return dict(value)
         return {}
 
 

@@ -176,4 +176,4 @@ class PocketTTSProvider(TTSProvider):
     def _emit_progress(self, loop: asyncio.AbstractEventLoop, progress: ProgressCallback | None, stage: str, message: str) -> None:
         if not progress:
             return
-        loop.call_soon_threadsafe(asyncio.create_task, progress("tts.progress", {"stage": stage, "message": message}))
+        asyncio.run_coroutine_threadsafe(progress("tts.progress", {"stage": stage, "message": message}), loop)

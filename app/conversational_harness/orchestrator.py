@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from conversational_harness.events import EventSink
 from conversational_harness.providers.factory import ProviderBundle
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from conversational_harness.runtime_settings import RuntimeSettings
@@ -70,6 +73,8 @@ class ConversationOrchestrator:
         active = [task for task in self.state.active_tts_tasks if not task.done()]
         for task in active:
             task.cancel()
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)
         self.state.tts_tail = None
         if active:
             await self.sink.emit("tts.cancelled", reason=reason)
@@ -211,8 +216,8 @@ class ConversationOrchestrator:
         if previous is not None:
             try:
                 await previous
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Previous TTS task failed: %s", exc)
         await self._stream_tts(text, turn_started, turn_id)
 
     async def _stream_tts(self, text: str, turn_started: float, turn_id: int) -> None:

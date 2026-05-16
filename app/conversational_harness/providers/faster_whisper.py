@@ -149,4 +149,4 @@ class FasterWhisperASRProvider(ASRProvider):
     ) -> None:
         if not progress:
             return
-        loop.call_soon_threadsafe(asyncio.create_task, progress("asr.progress", {"stage": stage, "message": message}))
+        asyncio.run_coroutine_threadsafe(progress("asr.progress", {"stage": stage, "message": message}), loop)
