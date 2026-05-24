@@ -99,6 +99,8 @@ class LlamaCppProvider(LLMProvider):
                 message=f"llama.cpp is ready, but configured model '{self.model}' is not in /v1/models. Loaded: {model_list}",
                 capabilities=ProviderCapabilities(),
             )
+        if self._resolved_model is not None and selected_model != self._resolved_model:
+            self._resolved_model = None
         active = "auto-selected" if self.model == "auto" else "selected"
         return ProviderStatus(
             name="llama.cpp",
@@ -124,20 +126,24 @@ class LlamaCppProvider(LLMProvider):
             payload[key] = value
         url = f"{self.base_url}/v1/chat/completions"
         timeout = httpx.Timeout(connect=3.0, read=60.0, write=10.0, pool=3.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", url, json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = line[6:].strip()
-                    if data == "[DONE]":
-                        break
-                    chunk = json.loads(data)
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    content = delta.get("content")
-                    if content:
-                        yield content
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", url, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data = line[6:].strip()
+                        if data == "[DONE]":
+                            break
+                        chunk = json.loads(data)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            yield content
+        except Exception:
+            self._resolved_model = None
+            raise
 
     def _build_sampler(self) -> dict:
         defaults = {
