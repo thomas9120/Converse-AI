@@ -30,27 +30,18 @@ future callers from silently mutating config.
 
 ### Performance
 
-#### 6. `LlamaCppProvider.resolve_model` makes an HTTP round-trip on every LLM request (`llamacpp.py:103, 138–149`)
-When `model == "auto"`, `stream_response` calls `resolve_model()` which makes a fresh
-`/v1/models` GET on every user turn. Cache the resolved model ID after first resolution and
-refresh only on `check_status()`.
+#### 6. `LlamaCppProvider.resolve_model` makes an HTTP round-trip on every LLM request (`llamacpp.py:103, 138–149`) — **FIXED**
+Cached resolved model ID in `self._resolved_model`, resolved lazily on first `stream_response`
+call. `check_status()` validates independently; the hot path skips the extra HTTP round-trip.
 
 #### 7. `provider_statuses_payload` rebuilds all providers on every call (`main.py:242–252`)
 Called by both `/api/status` and `broadcast_providers_status()` (fires on every TTS
 preset/voice change). Each call reconstructs all 4 provider objects from scratch. VAD, ASR, and
 LLM providers should be singletons; only the TTS provider needs rebuilding on preset changes.
 
-#### 8. `compute_pcm16_level` uses pure-Python loops over audio samples (`audio_frames.py:105–106`)
-```python
-peak = max(abs(s) for s in samples) / 32768
-mean_square = sum((s / 32768) ** 2 for s in samples) / len(samples)
-```
-Runs at 10 Hz on every audio frame. NumPy is already a dependency. Replace with:
-```python
-arr = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-peak = float(np.abs(arr).max())
-rms = float(np.sqrt(np.mean(arr ** 2)))
-```
+#### 8. `compute_pcm16_level` uses pure-Python loops over audio samples (`audio_frames.py:105–106`) — **FIXED**
+Replaced `struct.unpack` + generator loops with `np.frombuffer` + vectorized operations.
+Dropped now-unused `import math`.
 
 ---
 
@@ -60,10 +51,9 @@ rms = float(np.sqrt(np.mean(arr ** 2)))
 `section()` returns `self.raw.get(name, {})` directly. Callers can (and do — see #5) mutate the
 config in place. Return `dict(value)` to always hand back a copy.
 
-#### 10. Duplicated LLM-stream + TTS-flush loop (`orchestrator.py:134–195`)
-The inner token-streaming and TTS-flushing logic is copy-pasted between `handle_continue` and
-`_respond_to_transcript`. Extract a private `_stream_llm_and_tts(messages, started, turn_id)`
-helper to eliminate the duplication.
+#### 10. Duplicated LLM-stream + TTS-flush loop (`orchestrator.py:134–195`) — **FIXED**
+Extracted `_stream_llm_and_tts(response_text, started, turn_id) -> str` shared helper.
+Both `handle_continue` and `_respond_to_transcript` delegate to it, ~70 LOC removed.
 
 #### 11. `set_server_defaults` uses a redundant identity mapping (`runtime_settings.py:156–168`)
 Ten of eleven entries map `"foo" -> "foo"`. Only `max_tokens -> n_predict` differs. Simplify to

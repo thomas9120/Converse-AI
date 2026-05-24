@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import base64
-import math
-import struct
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+import numpy as np
 
 
 SUPPORTED_ENCODING = "pcm_s16le"
@@ -63,11 +63,17 @@ def parse_audio_frame(payload: dict[str, Any], expected: AudioFrameStats) -> Aud
     encoded_data = payload.get("data")
 
     if sample_rate != expected.expected_sample_rate:
-        raise ValueError(f"expected sample_rate {expected.expected_sample_rate}, got {sample_rate}")
+        raise ValueError(
+            f"expected sample_rate {expected.expected_sample_rate}, got {sample_rate}"
+        )
     if channels != expected.expected_channels:
-        raise ValueError(f"expected channels {expected.expected_channels}, got {channels}")
+        raise ValueError(
+            f"expected channels {expected.expected_channels}, got {channels}"
+        )
     if frame_ms != expected.expected_frame_ms:
-        raise ValueError(f"expected frame_ms {expected.expected_frame_ms}, got {frame_ms}")
+        raise ValueError(
+            f"expected frame_ms {expected.expected_frame_ms}, got {frame_ms}"
+        )
     if encoding != SUPPORTED_ENCODING:
         raise ValueError(f"expected encoding {SUPPORTED_ENCODING}, got {encoding}")
     if sequence < 0:
@@ -98,11 +104,9 @@ def parse_audio_frame(payload: dict[str, Any], expected: AudioFrameStats) -> Aud
 def compute_pcm16_level(data: bytes) -> dict[str, float]:
     if not data:
         return {"rms": 0.0, "peak": 0.0}
-    sample_count = len(data) // 2
-    samples = struct.unpack(f"<{sample_count}h", data)
-    if not samples:
+    arr = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+    if len(arr) == 0:
         return {"rms": 0.0, "peak": 0.0}
-    peak = max(abs(sample) for sample in samples) / 32768
-    mean_square = sum((sample / 32768) ** 2 for sample in samples) / len(samples)
-    rms = math.sqrt(mean_square)
+    peak = float(np.abs(arr).max())
+    rms = float(np.sqrt(np.mean(arr**2)))
     return {"rms": round(rms, 4), "peak": round(peak, 4)}
