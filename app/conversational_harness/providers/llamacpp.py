@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, AsyncIterator
 
 import httpx
 
-from conversational_harness.providers.base import LLMProvider, ProviderCapabilities, ProviderStatus
+from conversational_harness.providers.base import (
+    LLMProvider,
+    ProviderCapabilities,
+    ProviderStatus,
+)
 
 if TYPE_CHECKING:
     from conversational_harness.runtime_settings import RuntimeSettings
@@ -18,6 +22,7 @@ class LlamaCppProvider(LLMProvider):
         self.temperature = float(config.get("temperature", 0.7))
         self.max_tokens = int(config.get("max_tokens", 256))
         self._runtime_settings: RuntimeSettings | None = None
+        self._resolved_model: str | None = None
 
     def set_runtime_settings(self, settings: RuntimeSettings) -> None:
         self._runtime_settings = settings
@@ -49,7 +54,9 @@ class LlamaCppProvider(LLMProvider):
                 )
 
             if health_payload.get("status") != "ok":
-                message = health_payload.get("error", {}).get("message", "server did not report ready")
+                message = health_payload.get("error", {}).get(
+                    "message", "server did not report ready"
+                )
                 return ProviderStatus(
                     name="llama.cpp",
                     kind="llm",
@@ -71,7 +78,9 @@ class LlamaCppProvider(LLMProvider):
                     capabilities=ProviderCapabilities(),
                 )
 
-        model_ids = [str(item.get("id", "unknown")) for item in models_payload.get("data", [])]
+        model_ids = [
+            str(item.get("id", "unknown")) for item in models_payload.get("data", [])
+        ]
         if not model_ids:
             return ProviderStatus(
                 name="llama.cpp",
@@ -90,6 +99,8 @@ class LlamaCppProvider(LLMProvider):
                 message=f"llama.cpp is ready, but configured model '{self.model}' is not in /v1/models. Loaded: {model_list}",
                 capabilities=ProviderCapabilities(),
             )
+        if self._resolved_model is not None and selected_model != self._resolved_model:
+            self._resolved_model = None
         active = "auto-selected" if self.model == "auto" else "selected"
         return ProviderStatus(
             name="llama.cpp",
@@ -99,8 +110,12 @@ class LlamaCppProvider(LLMProvider):
             capabilities=ProviderCapabilities(),
         )
 
-    async def stream_response(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
-        model = await self.resolve_model()
+    async def stream_response(
+        self, messages: list[dict[str, str]]
+    ) -> AsyncIterator[str]:
+        if self._resolved_model is None:
+            self._resolved_model = await self._resolve_model()
+        model = self._resolved_model
         sampler = self._build_sampler()
         payload: dict = {
             "model": model,
@@ -111,20 +126,24 @@ class LlamaCppProvider(LLMProvider):
             payload[key] = value
         url = f"{self.base_url}/v1/chat/completions"
         timeout = httpx.Timeout(connect=3.0, read=60.0, write=10.0, pool=3.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", url, json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = line[6:].strip()
-                    if data == "[DONE]":
-                        break
-                    chunk = json.loads(data)
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    content = delta.get("content")
-                    if content:
-                        yield content
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", url, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data = line[6:].strip()
+                        if data == "[DONE]":
+                            break
+                        chunk = json.loads(data)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            yield content
+        except Exception:
+            self._resolved_model = None
+            raise
 
     def _build_sampler(self) -> dict:
         defaults = {
@@ -135,7 +154,7 @@ class LlamaCppProvider(LLMProvider):
             return self._runtime_settings.effective_sampler()
         return defaults
 
-    async def resolve_model(self) -> str:
+    async def _resolve_model(self) -> str:
         if self.model != "auto":
             return self.model
         timeout = httpx.Timeout(connect=1.0, read=2.0, write=1.0, pool=1.0)
@@ -145,7 +164,9 @@ class LlamaCppProvider(LLMProvider):
             payload = response.json()
         model_data = payload.get("data", [])
         if not model_data:
-            raise RuntimeError("llama.cpp did not report a loaded model from /v1/models")
+            raise RuntimeError(
+                "llama.cpp did not report a loaded model from /v1/models"
+            )
         return str(model_data[0].get("id", "unknown"))
 
     async def unload(self) -> ProviderStatus:

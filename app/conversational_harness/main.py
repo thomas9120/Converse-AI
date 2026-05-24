@@ -34,27 +34,12 @@ STATIC_ROOT = PROJECT_ROOT / "app" / "static"
 MAX_CHARACTER_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_CHARACTER_UPLOAD_BASE64_CHARS = ((MAX_CHARACTER_UPLOAD_BYTES + 2) // 3) * 4
 
-BASE_CONFIG = load_config()
-TTS_MANAGER = TTSRuntimeManager(BASE_CONFIG, load_tts_presets())
-ACTIVE_QUEUES: set[asyncio.Queue[dict[str, Any]]] = set()
-TTS_CANCEL_HOOKS: set[Any] = set()
-TURN_CONFIG_HOOKS: set[Any] = set()
-CHARACTER_SEED_HOOKS: set[Any] = set()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _fetch_llm_server_defaults()
     yield
-    logger.info("Shutting down: cleaning up providers and active connections.")
     await cancel_active_tts("shutdown")
-    providers = build_provider_bundle(BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider())
-    for provider in (providers.vad, providers.asr, providers.llm, providers.tts):
-        try:
-            if hasattr(provider, "unload"):
-                await provider.unload()
-        except Exception:
-            pass
     for queue in list(ACTIVE_QUEUES):
         ACTIVE_QUEUES.discard(queue)
 

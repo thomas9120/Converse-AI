@@ -1,48 +1,94 @@
 # TODO
 
-## Queue TTS Across Continue Turns
+## Code Review Findings
 
-### Goal
-- Prevent newly generated TTS from playing over audio that is already in progress.
-- When the user clicks Continue while assistant speech is still playing, generate the continued text normally, but delay its TTS audio until the current speech queue has finished.
-- Preserve barge-in behavior: user speech or explicit stop/cancel should still interrupt playback.
+### Bugs
 
-### Current Behavior
-- The orchestrator serializes TTS chunks inside a single assistant turn with `state.tts_tail`.
-- Starting a new text, audio, or continue turn currently calls `cancel_tts(...)`, which cancels pending/current TTS before the new turn starts speaking.
-- The browser also has its own Web Audio scheduling queue, so backend and frontend need to agree on when playback is actually finished.
+#### 1. Double initialization in `main.py` (lines 37–71) — **FIXED**
+Removed the first init block and the dead throwaway-ProviderBundle shutdown logic. The sole init
+block now lives after `app = FastAPI(...)`.
 
-### Proposed Plan
-- Add a TTS queue mode for continue turns:
-  - Keep current cancellation behavior for new user text, microphone speech, barge-in, manual stop, clear, and TTS preset changes.
-  - For `user.continue`, do not cancel active TTS by default.
-  - Let continued-turn TTS append behind the existing backend `tts_tail` chain so speech is generated and emitted only after prior TTS tasks finish.
-- Track turn ownership clearly:
-  - Keep `turn_id` on all `tts.first_chunk` and `tts.audio` events.
-  - Ensure a continued turn can stream LLM text immediately while its TTS waits behind existing audio.
-  - Avoid resetting the browser playback clock on `turn.started` for continue turns if audio is already scheduled.
-- Add a playback completion handshake if backend-only sequencing is not enough:
-  - Browser emits an event such as `audio.playback_finished` after its scheduled queue drains.
-  - Backend can use this to avoid generating next queued TTS too early when browser-side playback lead time is significant.
-  - Keep this optional for the first pass if existing backend `tts_tail` sequencing is sufficient in manual testing.
-- Add a small runtime/profile option if needed:
-  - Example: `turn.continue_tts_policy = "queue"` by default.
-  - Accepted values could be `"queue"` and `"cancel"`, but only add this if tests or usability show users need both modes.
+#### 2. Unsafe thread-to-event-loop progress dispatch — **FIXED**
+Replaced `loop.call_soon_threadsafe(asyncio.create_task, ...)` with
+`asyncio.run_coroutine_threadsafe(..., loop)` in both `faster_whisper.py:152` and
+`pocket_tts.py:179`.
 
-### Edge Cases
-- If the user speaks while queued continue TTS is waiting, cancel the queued TTS and stop browser playback.
-- If the user clicks Stop Audio, cancel both currently playing and queued backend TTS tasks.
-- If the user clicks Continue repeatedly, preserve ordering so each continuation's TTS plays after the previous queued speech.
-- If TTS provider/preset/voice changes while queued audio exists, cancel the queue before switching.
-- If the LLM continuation errors, do not disturb already playing speech unless the user explicitly cancels.
+#### 3. `cancel_tts` does not await cancelled tasks (`orchestrator.py:69–75`) — **FIXED**
+Added `await asyncio.gather(*active, return_exceptions=True)` after the cancel loop so that
+stale TTS streams complete before the next turn starts.
 
-### Test Plan
-- Add orchestrator tests verifying continue does not call `cancel_tts("continue_turn")` when queue mode is active.
-- Add a test where a second assistant TTS task waits behind an existing `tts_tail`.
-- Add a test that user text still cancels active/queued TTS.
-- Add a test that manual `tts.cancel` clears queued TTS.
-- Manually test in the browser:
-  - Ask for a long spoken response.
-  - Click Continue while audio is still playing.
-  - Confirm the continued text appears immediately, but its TTS starts only after current audio finishes.
-  - Confirm barge-in and Stop Audio still interrupt immediately.
+#### 4. `_stream_tts_after` silently swallows TTS task failures (`orchestrator.py:211–215`) — **FIXED**
+Replaced bare `pass` with `logger.warning(...)`. `CancelledError` (a `BaseException`) is not
+caught, so expected cancellations stay silent.
+
+#### 5. `build_provider_bundle` mutates the config dict in place (`factory.py:110`) — **FIXED**
+Fixed `HarnessConfig.section()` in `config.py` to `return dict(value)` instead of `return
+value`, so callers always get a copy. This fixes both the factory.py mutation and prevents
+future callers from silently mutating config.
+
+---
+
+### Performance
+
+#### 6. `LlamaCppProvider.resolve_model` makes an HTTP round-trip on every LLM request (`llamacpp.py:103, 138–149`) — **FIXED**
+Cached resolved model ID in `self._resolved_model`, resolved lazily on first `stream_response`
+call. `check_status()` validates independently; the hot path skips the extra HTTP round-trip.
+
+#### 7. `provider_statuses_payload` rebuilds all providers on every call (`main.py:242–252`)
+Called by both `/api/status` and `broadcast_providers_status()` (fires on every TTS
+preset/voice change). Each call reconstructs all 4 provider objects from scratch. VAD, ASR, and
+LLM providers should be singletons; only the TTS provider needs rebuilding on preset changes.
+
+#### 8. `compute_pcm16_level` uses pure-Python loops over audio samples (`audio_frames.py:105–106`) — **FIXED**
+Replaced `struct.unpack` + generator loops with `np.frombuffer` + vectorized operations.
+Dropped now-unused `import math`.
+
+---
+
+### Maintainability
+
+#### 9. `HarnessConfig.section()` returns a mutable reference into the internal dict (`config.py:23`)
+`section()` returns `self.raw.get(name, {})` directly. Callers can (and do — see #5) mutate the
+config in place. Return `dict(value)` to always hand back a copy.
+
+#### 10. Duplicated LLM-stream + TTS-flush loop (`orchestrator.py:134–195`) — **FIXED**
+Extracted `_stream_llm_and_tts(response_text, started, turn_id) -> str` shared helper.
+Both `handle_continue` and `_respond_to_transcript` delegate to it, ~70 LOC removed.
+
+#### 11. `set_server_defaults` uses a redundant identity mapping (`runtime_settings.py:156–168`)
+Ten of eleven entries map `"foo" -> "foo"`. Only `max_tokens -> n_predict` differs. Simplify to
+iterate `SAMPLER_KEYS` directly and handle the one special case explicitly.
+
+#### 12. Hook sets are typed `set[Any]` (`main.py:40–42, 69–71`)
+```python
+TTS_CANCEL_HOOKS: set[Any] = set()
+```
+The actual callable signatures are known. Use specific `Callable` types to catch errors earlier.
+
+#### 13. `TTSRuntimeManager.select_preset` / `select_voice` call `describe()` outside the lock (`tts_runtime.py:127, 139`)
+The lock is released after mutation, then `describe()` re-acquires it. Between the two
+acquisitions, another coroutine could observe a partially-updated state. Either inline the
+describe logic inside the existing lock scope, or document the accepted risk.
+
+#### 14. `VADEvent.type` field shadows the Python built-in `type` (`base.py:49`)
+Rename to `event_type` or `kind` for clarity and to avoid shadowing the built-in.
+
+---
+
+### Style / Minor
+
+#### 15. Import ordering in `faster_whisper.py` (line 10)
+`logger = logging.getLogger(__name__)` appears before a project-level import. Move all imports
+above the logger assignment per PEP 8.
+
+#### 16. `should_flush_tts` parameter names are inconsistent with profile keys (`orchestrator.py:274`)
+Parameters are named `limit` and `minimum`; the profile JSON uses `tts_chunk_chars` and
+`min_tts_chars`. Rename to match, and add a short docstring.
+
+#### 17. PNG CRC not validated in `parse_character_png` (`runtime_settings.py:107–125`)
+Chunk CRCs are parsed but not checked. Corrupted cards silently produce wrong data until the
+payload fails to decode. Add a `zlib.crc32` check per chunk (low priority for a local tool).
+
+#### 18. `UnavailableProvider` multiple-Protocol inheritance is undocumented (`unavailable.py:17`)
+Inheriting from all 4 `Protocol` classes works but is unusual. Add a comment explaining why the
+class implements all roles (single catch-all for unknown provider names in the factory).
