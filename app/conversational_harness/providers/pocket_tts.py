@@ -36,16 +36,20 @@ class PocketTTSProvider(TTSProvider):
                 supports_model_management=True,
                 supports_voice_selection=True,
             )
+        mode = "int8" if self.quantize else "fp32"
         if self._model is not None and self._voice_state is not None:
-            message = f"Loaded Pocket TTS voice '{self.voice}'."
+            message = f"Loaded Pocket TTS voice '{self.voice}' ({mode})."
         else:
-            message = f"Configured for Pocket TTS voice '{self.voice}'. Model and voice load on first TTS request."
+            message = f"Configured for Pocket TTS voice '{self.voice}' ({mode}). Model and voice load on first TTS request."
         return ProviderStatus(
             name="pocket-tts",
             kind="tts",
             ready=True,
             message=message,
-            capabilities=ProviderCapabilities(supports_streaming_tts=True, languages=("en",)),
+            capabilities=ProviderCapabilities(
+                supports_streaming_tts=True,
+                languages=("en", "fr", "de", "pt", "it", "es"),
+            ),
             provider_id="pocket-tts",
             loaded=self._model is not None and self._voice_state is not None,
             supports_model_management=True,

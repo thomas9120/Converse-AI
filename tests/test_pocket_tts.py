@@ -1,4 +1,7 @@
 import asyncio
+import sys
+import types
+
 import numpy as np
 
 from conversational_harness.providers.factory import build_tts
@@ -49,3 +52,23 @@ def test_pocket_tts_streams_pcm_with_progress():
     assert chunks[0].channels == 1
     assert chunks[0].mime_type is None
     assert ("tts.progress", "complete") in progress_events
+
+
+def test_pocket_tts_forwards_quantize_to_loader(monkeypatch):
+    load_kwargs = {}
+
+    class FakeTTSModel:
+        @classmethod
+        def load_model(cls, **kwargs):
+            load_kwargs.update(kwargs)
+            return FakePocketModel()
+
+    monkeypatch.setitem(sys.modules, "pocket_tts", types.SimpleNamespace(TTSModel=FakeTTSModel))
+    provider = PocketTTSProvider({"voice": "azelma", "quantize": True, "language": "english"})
+
+    asyncio.run(provider.load())
+
+    assert load_kwargs["quantize"] is True
+    assert load_kwargs["language"] == "english"
+    assert provider.status.loaded is True
+    assert "int8" in provider.status.message
