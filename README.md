@@ -32,7 +32,7 @@ Then open `http://127.0.0.1:7860`.
 
 ## Prerequisites
 
-- **Python 3.11+** (the project venv uses whatever Python created it)
+- **Python 3.11, 3.12, or 3.13** (Python 3.14 is not supported by `kokoro-onnx==0.5.0`; the project venv uses whatever Python created it)
 - **llama.cpp server** running separately for LLM inference (see [llama.cpp](#llamacpp) section)
 - **CUDA 12+** (optional, for GPU ASR — the harness falls back to CPU if unavailable)
 
@@ -93,6 +93,12 @@ The default profile uses Pocket TTS with the voice `azelma`:
 ```
 
 Pocket TTS loads the model and voice state on first use, then reuses them for later turns. The model is gated on Hugging Face, so accept the model terms for `kyutai/pocket-tts` and make sure your Hugging Face token is available if first use reports an access error.
+
+Pocket TTS 2.1.0 supports int8 quantization through the `quantize` profile option. The default Pocket preset keeps full precision, and the runtime selector also includes `Pocket TTS INT8` for lower memory use and faster CPU inference:
+
+```json
+"quantize": true
+```
 
 For smoother playback, the local profiles feed Pocket TTS larger phrase-sized chunks and the browser schedules decoded PCM chunks on a shared Web Audio timeline instead of playing each chunk as a separate audio element.
 

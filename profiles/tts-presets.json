@@ -45,6 +45,50 @@
       ]
     },
     {
+      "id": "pocket-tts-int8",
+      "label": "Pocket TTS INT8",
+      "description": "Pocket TTS with dynamic int8 quantization for lower memory use and faster CPU inference.",
+      "provider": "pocket-tts",
+      "tts": {
+        "provider": "pocket-tts",
+        "voice": "azelma",
+        "temp": 0.7,
+        "max_tokens": 50,
+        "quantize": true,
+        "coalesce_ms": 400
+      },
+      "turn": {
+        "tts_chunk_chars": 260,
+        "min_tts_chars": 110
+      },
+      "management": {
+        "mode": "in_process"
+      },
+      "voices": [
+        { "id": "alba", "label": "Alba" },
+        { "id": "anna", "label": "Anna" },
+        { "id": "azelma", "label": "Azelma" },
+        { "id": "bill_boerst", "label": "Bill Boerst" },
+        { "id": "caro_davy", "label": "Caro Davy" },
+        { "id": "charles", "label": "Charles" },
+        { "id": "cosette", "label": "Cosette" },
+        { "id": "eponine", "label": "Eponine" },
+        { "id": "eve", "label": "Eve" },
+        { "id": "fantine", "label": "Fantine" },
+        { "id": "george", "label": "George" },
+        { "id": "jane", "label": "Jane" },
+        { "id": "jean", "label": "Jean" },
+        { "id": "javert", "label": "Javert" },
+        { "id": "marius", "label": "Marius" },
+        { "id": "mary", "label": "Mary" },
+        { "id": "michael", "label": "Michael" },
+        { "id": "paul", "label": "Paul" },
+        { "id": "peter_yearsley", "label": "Peter Yearsley" },
+        { "id": "stuart_bell", "label": "Stuart Bell" },
+        { "id": "vera", "label": "Vera" }
+      ]
+    },
+    {
       "id": "kokoro-v1",
       "label": "Kokoro v1.0",
       "description": "Kokoro ONNX on CPU with curated English voices.",
