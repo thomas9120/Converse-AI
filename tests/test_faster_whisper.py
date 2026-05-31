@@ -20,6 +20,32 @@ def make_pcm(samples):
     return struct.pack(f"<{len(samples)}h", *samples)
 
 
+def test_faster_whisper_load_is_noop_when_model_is_loaded():
+    model = FakeWhisperModel()
+    provider = FasterWhisperASRProvider({"_model": model})
+
+    status = asyncio.run(provider.load())
+
+    assert status.ready
+    assert provider._model is model
+
+
+def test_faster_whisper_load_reports_failure(monkeypatch):
+    provider = FasterWhisperASRProvider({"model": "missing", "timeout_s": 1})
+
+    def fail():
+        raise RuntimeError("load failed")
+
+    monkeypatch.setattr(provider, "_ensure_model", fail)
+
+    try:
+        asyncio.run(provider.load())
+    except RuntimeError as exc:
+        assert "load failed" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
 def test_faster_whisper_transcribe_audio_uses_loaded_model():
     model = FakeWhisperModel()
     provider = FasterWhisperASRProvider({"_model": model, "language": "en"})

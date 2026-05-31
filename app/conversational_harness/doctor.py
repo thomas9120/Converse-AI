@@ -14,6 +14,8 @@ import httpx
 
 from conversational_harness.config import load_config
 from conversational_harness.providers import build_providers
+from conversational_harness.providers.base import ProviderCapabilities, ProviderStatus
+from conversational_harness.providers.factory import serialize_status
 
 
 @dataclass
@@ -26,17 +28,19 @@ class Check:
 def main() -> None:
     config = load_config()
     providers = build_providers(config)
-    provider_statuses = asyncio.run(providers.check_statuses())
-    checks = [
-        check_python(),
-        check_profile(config.path),
-        check_package("fastapi"),
-        check_package("uvicorn"),
-        check_port_available(7860),
-        check_cuda_tooling(),
-        check_vulkan_tooling(),
-        check_llamacpp(config.section("llm")),
-    ]
+    provider_statuses = asyncio.run(check_provider_statuses(providers))
+    checks = collect_checks(
+        [
+            ("Python", check_python),
+            ("Profile", lambda: check_profile(config.path)),
+            ("fastapi", lambda: check_package("fastapi")),
+            ("uvicorn", lambda: check_package("uvicorn")),
+            ("Harness port", lambda: check_port_available(7860)),
+            ("CUDA tooling", check_cuda_tooling),
+            ("Vulkan tooling", check_vulkan_tooling),
+            ("llama.cpp server", lambda: check_llamacpp(config.section("llm"))),
+        ]
+    )
 
     print(f"Profile: {config.name}")
     print(f"Profile path: {config.path}")
@@ -51,6 +55,39 @@ def main() -> None:
 
     if any(not check.ok for check in checks if check.name in {"Python", "Profile", "fastapi", "uvicorn"}):
         sys.exit(1)
+
+
+async def check_provider_statuses(providers) -> list[dict]:
+    return [
+        await safe_provider_status("vad", providers.vad),
+        await safe_provider_status("asr", providers.asr),
+        await safe_provider_status("llm", providers.llm),
+        await safe_provider_status("tts", providers.tts),
+    ]
+
+
+async def safe_provider_status(kind: str, provider) -> dict:
+    try:
+        status = await provider.check_status()
+    except Exception as exc:
+        status = ProviderStatus(
+            name=getattr(provider, "__class__", type(provider)).__name__,
+            kind=kind,
+            ready=False,
+            message=f"status check failed: {exc}",
+            capabilities=ProviderCapabilities(),
+        )
+    return serialize_status(status)
+
+
+def collect_checks(check_factories: list[tuple[str, Any]]) -> list[Check]:
+    checks: list[Check] = []
+    for name, factory in check_factories:
+        try:
+            checks.append(factory())
+        except Exception as exc:
+            checks.append(Check(name, False, f"check failed: {exc}"))
+    return checks
 
 
 def check_python() -> Check:
