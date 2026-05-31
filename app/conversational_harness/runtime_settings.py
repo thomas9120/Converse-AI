@@ -13,6 +13,10 @@ from conversational_harness.config import PROJECT_ROOT
 logger = logging.getLogger(__name__)
 
 SETTINGS_PATH = PROJECT_ROOT / "user_settings.json"
+MEMORY_PATH = PROJECT_ROOT / "memory.md"
+MAX_MEMORY_CHARS = 20000
+MODE_CHAT = "chat"
+MODE_COMPANION = "companion"
 
 SAMPLER_KEYS = (
     "temperature",
@@ -27,6 +31,8 @@ SAMPLER_KEYS = (
     "mirostat_eta",
     "max_tokens",
 )
+
+VALID_MODES = {MODE_CHAT, MODE_COMPANION}
 
 
 @dataclass
@@ -82,6 +88,62 @@ class CharacterCard:
         return self.first_mes.replace("{{user}}", user_name).replace("{{char}}", char_name).strip()
 
 
+@dataclass
+class CompanionSettings:
+    user_name: str = "You"
+    ai_name: str = "Companion"
+    system_prompt: str = ""
+    llm_overrides: dict[str, Any] = field(default_factory=dict)
+    memory_enabled: bool = True
+
+    def effective_sampler(
+        self, profile_defaults: dict[str, Any], server_defaults: dict[str, Any]
+    ) -> dict[str, Any]:
+        result = dict(server_defaults)
+        result.update({k: v for k, v in profile_defaults.items() if v is not None})
+        result.update({k: v for k, v in self.llm_overrides.items() if v is not None})
+        return result
+
+    def sampler_display(
+        self, profile_defaults: dict[str, Any], server_defaults: dict[str, Any]
+    ) -> dict[str, Any]:
+        display = {}
+        for key in SAMPLER_KEYS:
+            if key in self.llm_overrides and self.llm_overrides[key] is not None:
+                display[key] = self.llm_overrides[key]
+            elif key in profile_defaults and profile_defaults[key] is not None:
+                display[key] = profile_defaults[key]
+            elif key in server_defaults and server_defaults[key] is not None:
+                display[key] = server_defaults[key]
+        return display
+
+    def to_dict(
+        self, profile_defaults: dict[str, Any], server_defaults: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {
+            "user_name": self.user_name,
+            "ai_name": self.ai_name,
+            "system_prompt": self.system_prompt,
+            "llm_overrides": dict(self.llm_overrides),
+            "memory_enabled": self.memory_enabled,
+            "sampler_display": self.sampler_display(profile_defaults, server_defaults),
+        }
+
+    def apply_patch(self, patch: dict[str, Any]) -> None:
+        if "llm_overrides" in patch and isinstance(patch["llm_overrides"], dict):
+            self.llm_overrides = {
+                k: v for k, v in patch["llm_overrides"].items() if k in SAMPLER_KEYS
+            }
+        if "user_name" in patch:
+            self.user_name = str(patch["user_name"]).strip() or "You"
+        if "ai_name" in patch:
+            self.ai_name = str(patch["ai_name"]).strip() or "Companion"
+        if "system_prompt" in patch:
+            self.system_prompt = str(patch["system_prompt"]).strip()
+        if "memory_enabled" in patch:
+            self.memory_enabled = bool(patch["memory_enabled"])
+
+
 def _parse_character_card(data: dict[str, Any]) -> CharacterCard:
     spec = data.get("data", data)
     return CharacterCard(
@@ -132,10 +194,14 @@ class RuntimeSettings:
     ai_name: str = "Assistant"
     character: CharacterCard | None = None
     additional_system_prompt: str = ""
+    active_mode: str = MODE_CHAT
+    companion: CompanionSettings = field(default_factory=CompanionSettings)
     profile_defaults: dict[str, Any] = field(default_factory=dict)
     server_defaults: dict[str, Any] = field(default_factory=dict)
 
-    def effective_sampler(self) -> dict[str, Any]:
+    def effective_sampler(self, mode: str | None = None) -> dict[str, Any]:
+        if self._normalize_mode(mode or self.active_mode) == MODE_COMPANION:
+            return self.companion.effective_sampler(self.profile_defaults, self.server_defaults)
         result = dict(self.server_defaults)
         result.update({k: v for k, v in self.profile_defaults.items() if v is not None})
         result.update({k: v for k, v in self.llm_overrides.items() if v is not None})
@@ -173,7 +239,11 @@ class RuntimeSettings:
         if "max_tokens" in self.server_defaults and self.server_defaults["max_tokens"] == -1:
             del self.server_defaults["max_tokens"]
 
-    def effective_system_prompt(self, manual_prompt: str = "") -> str:
+    def effective_system_prompt(
+        self, manual_prompt: str = "", mode: str | None = None, memory_text: str = ""
+    ) -> str:
+        if self._normalize_mode(mode or self.active_mode) == MODE_COMPANION:
+            return self.companion_system_prompt(manual_prompt, memory_text)
         parts: list[str] = []
         if self.character:
             parts.append(self.character.build_system_prompt(self.user_name, self.ai_name))
@@ -187,6 +257,20 @@ class RuntimeSettings:
             combined_supplement = f"{combined_supplement}\n\n{manual_prompt}".strip() if combined_supplement else manual_prompt
         if combined_supplement:
             parts.append(combined_supplement)
+        return "\n\n".join(parts)
+
+    def companion_system_prompt(self, manual_prompt: str = "", memory_text: str = "") -> str:
+        parts: list[str] = []
+        header = f"You are {self.companion.ai_name or 'Companion'}."
+        if self.companion.user_name and self.companion.user_name != "You":
+            header += f" The user's name is {self.companion.user_name}."
+        parts.append(header)
+        if self.companion.system_prompt:
+            parts.append(self.companion.system_prompt)
+        if self.companion.memory_enabled and memory_text.strip():
+            parts.append("Long-term memory:\n" + memory_text.strip())
+        if manual_prompt.strip():
+            parts.append(manual_prompt.strip())
         return "\n\n".join(parts)
 
     def display_name_user(self) -> str:
@@ -203,7 +287,9 @@ class RuntimeSettings:
             "user_name": self.user_name,
             "ai_name": self.ai_name,
             "additional_system_prompt": self.additional_system_prompt,
+            "active_mode": self.active_mode,
             "sampler_display": self.sampler_display(),
+            "companion": self.companion.to_dict(self.profile_defaults, self.server_defaults),
         }
         if self.character:
             result["character"] = self.character.to_dict()
@@ -217,18 +303,25 @@ class RuntimeSettings:
             self.llm_overrides = {
                 k: v for k, v in patch["llm_overrides"].items() if k in SAMPLER_KEYS
             }
+        if "active_mode" in patch:
+            self.active_mode = self._normalize_mode(str(patch["active_mode"]))
         if "user_name" in patch:
             self.user_name = str(patch["user_name"]).strip() or "You"
         if "ai_name" in patch:
             self.ai_name = str(patch["ai_name"]).strip() or "Assistant"
         if "additional_system_prompt" in patch:
             self.additional_system_prompt = str(patch["additional_system_prompt"]).strip()
+        if "companion" in patch and isinstance(patch["companion"], dict):
+            self.companion.apply_patch(patch["companion"])
 
     def set_character(self, card: CharacterCard) -> None:
         self.character = card
 
     def clear_character(self) -> None:
         self.character = None
+
+    def _normalize_mode(self, mode: str) -> str:
+        return mode if mode in VALID_MODES else MODE_CHAT
 
 
 def load_runtime_settings(profile_llm_config: dict[str, Any] | None = None) -> RuntimeSettings:
@@ -252,6 +345,10 @@ def load_runtime_settings(profile_llm_config: dict[str, Any] | None = None) -> R
                 settings.ai_name = str(data["ai_name"]).strip() or "Assistant"
             if "additional_system_prompt" in data:
                 settings.additional_system_prompt = str(data["additional_system_prompt"]).strip()
+            if "active_mode" in data:
+                settings.active_mode = settings._normalize_mode(str(data["active_mode"]))
+            if "companion" in data and isinstance(data["companion"], dict):
+                settings.companion.apply_patch(data["companion"])
             if "character" in data and data["character"]:
                 settings.character = _parse_character_card(data["character"])
         except Exception as exc:
@@ -265,3 +362,58 @@ def save_runtime_settings(settings: RuntimeSettings) -> None:
             handle.write(settings.to_json())
     except Exception as exc:
         logger.warning("Failed to save user settings: %s", exc)
+
+
+class MemoryStore:
+    def __init__(self, path: Path = MEMORY_PATH, max_chars: int = MAX_MEMORY_CHARS):
+        self.path = path
+        self.max_chars = max_chars
+
+    def read(self) -> str:
+        if not self.path.exists():
+            return ""
+        text = self.path.read_text(encoding="utf-8")
+        if len(text) > self.max_chars:
+            return text[-self.max_chars :]
+        return text
+
+    def metadata(self) -> dict[str, Any]:
+        exists = self.path.exists()
+        text = self.read() if exists else ""
+        modified = self.path.stat().st_mtime if exists else None
+        return {
+            "path": str(self.path),
+            "exists": exists,
+            "chars": len(text),
+            "max_chars": self.max_chars,
+            "modified": modified,
+        }
+
+    def payload(self) -> dict[str, Any]:
+        return {"text": self.read(), "metadata": self.metadata()}
+
+    def write(self, text: str) -> None:
+        clean = text.strip()
+        if len(clean) > self.max_chars:
+            raise ValueError(f"Memory is too large. Keep it under {self.max_chars} characters.")
+        if clean:
+            self.path.write_text(clean + "\n", encoding="utf-8")
+        elif self.path.exists():
+            self.path.unlink()
+
+    def append_summary(self, summary: str, title: str) -> str:
+        clean_summary = summary.strip()
+        if not clean_summary:
+            raise ValueError("Memory summary was empty.")
+        existing = self.read().strip()
+        section = f"## {title}\n\n{clean_summary}"
+        combined = f"{existing}\n\n{section}".strip() if existing else section
+        if len(combined) > self.max_chars:
+            overflow = len(combined) - self.max_chars
+            combined = combined[overflow:].lstrip()
+        self.write(combined)
+        return combined
+
+    def clear(self) -> None:
+        if self.path.exists():
+            self.path.unlink()

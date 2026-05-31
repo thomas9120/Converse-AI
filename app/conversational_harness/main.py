@@ -8,6 +8,7 @@ import logging
 import struct
 from collections import deque
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from conversational_harness.config import PROJECT_ROOT, load_config
 from conversational_harness.orchestrator import ConversationOrchestrator, QueueEventSink
 from conversational_harness.providers.factory import build_provider_bundle, serialize_statuses
 from conversational_harness.runtime_settings import (
+    MemoryStore,
     RuntimeSettings,
     load_runtime_settings,
     parse_character_json,
@@ -50,10 +52,12 @@ app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 BASE_CONFIG = load_config()
 TTS_MANAGER = TTSRuntimeManager(BASE_CONFIG, load_tts_presets())
 RUNTIME_SETTINGS = load_runtime_settings(BASE_CONFIG.section("llm"))
+MEMORY_STORE = MemoryStore()
 ACTIVE_QUEUES: set[asyncio.Queue[dict[str, Any]]] = set()
 TTS_CANCEL_HOOKS: set[Any] = set()
 TURN_CONFIG_HOOKS: set[Any] = set()
 CHARACTER_SEED_HOOKS: set[Any] = set()
+COMPANION_HISTORY_HOOKS: set[Any] = set()
 
 
 async def _fetch_llm_server_defaults() -> None:
@@ -140,6 +144,66 @@ async def patch_settings(payload: dict[str, Any]) -> dict[str, Any]:
     save_runtime_settings(RUNTIME_SETTINGS)
     await broadcast_settings()
     return RUNTIME_SETTINGS.to_dict()
+
+
+@app.get("/api/companion/memory")
+async def get_companion_memory() -> dict[str, Any]:
+    return MEMORY_STORE.payload()
+
+
+@app.put("/api/companion/memory")
+async def put_companion_memory(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        MEMORY_STORE.write(str(payload.get("text", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MEMORY_STORE.payload()
+
+
+@app.delete("/api/companion/memory")
+async def delete_companion_memory() -> dict[str, Any]:
+    MEMORY_STORE.clear()
+    return MEMORY_STORE.payload()
+
+
+@app.post("/api/companion/memory/summarize")
+async def summarize_companion_memory() -> dict[str, Any]:
+    messages: list[dict[str, str]] = []
+    for hook in list(COMPANION_HISTORY_HOOKS):
+        messages = hook()
+        if messages:
+            break
+    if not messages:
+        raise HTTPException(status_code=400, detail="No companion conversation to summarize")
+
+    providers = build_provider_bundle(BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider())
+    if hasattr(providers.llm, "set_runtime_settings"):
+        providers.llm.set_runtime_settings(RUNTIME_SETTINGS)
+    RUNTIME_SETTINGS.active_mode = "companion"
+    summary_prompt = [
+        {
+            "role": "system",
+            "content": (
+                "Summarize durable companion memory from this conversation. "
+                "Keep stable user preferences, personal facts, relationship context, and ongoing plans. "
+                "Omit transient wording, filler, and anything uncertain. Use concise Markdown bullets."
+            ),
+        },
+        *messages,
+        {"role": "user", "content": "Write the memory update now."},
+    ]
+    chunks: list[str] = []
+    try:
+        async for token in providers.llm.stream_response(summary_prompt):
+            chunks.append(token)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Memory summary failed: {exc}") from exc
+    title = datetime.now().strftime("%Y-%m-%d %H:%M")
+    try:
+        text = MEMORY_STORE.append_summary("".join(chunks), title)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"text": text, "metadata": MEMORY_STORE.metadata()}
 
 
 @app.post("/api/settings/character")
@@ -333,6 +397,7 @@ async def websocket_events(websocket: WebSocket) -> None:
         tts_chunk_chars=int(turn_config.get("tts_chunk_chars", 120)),
         min_tts_chars=int(turn_config.get("min_tts_chars", 0)),
         runtime_settings=RUNTIME_SETTINGS,
+        memory_store=MEMORY_STORE,
     )
 
     async def cancel_hook(reason: str) -> None:
@@ -340,6 +405,9 @@ async def websocket_events(websocket: WebSocket) -> None:
 
     async def seed_hook() -> None:
         await orchestrator.seed_character_first_message()
+
+    def companion_history_hook() -> list[dict[str, str]]:
+        return orchestrator.messages_for_mode("companion")
 
     def turn_config_hook(config: dict[str, Any]) -> None:
         orchestrator.update_turn_config(
@@ -351,6 +419,7 @@ async def websocket_events(websocket: WebSocket) -> None:
     TTS_CANCEL_HOOKS.add(cancel_hook)
     TURN_CONFIG_HOOKS.add(turn_config_hook)
     CHARACTER_SEED_HOOKS.add(seed_hook)
+    COMPANION_HISTORY_HOOKS.add(companion_history_hook)
     await orchestrator.seed_character_first_message()
 
     async def sender() -> None:
@@ -386,30 +455,37 @@ async def websocket_events(websocket: WebSocket) -> None:
             message = await websocket.receive_json()
             message_type = message.get("type")
             payload = message.get("payload", {})
+            mode = str(payload.get("mode", "chat"))
+            if mode not in ("chat", "companion"):
+                mode = "chat"
             if message_type == "user.text":
                 text = str(payload.get("text", "")).strip()
-                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")))
+                RUNTIME_SETTINGS.active_mode = mode
+                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")), mode=mode)
                 if not text:
                     continue
                 orchestrator.providers.tts = TTS_MANAGER.get_provider()
                 await cancel_active_turn("new_user_text")
-                active_turn = asyncio.create_task(orchestrator.handle_text_turn(text))
+                active_turn = asyncio.create_task(orchestrator.handle_text_turn(text, mode=mode))
             elif message_type == "user.continue":
+                RUNTIME_SETTINGS.active_mode = mode
                 orchestrator.providers.tts = TTS_MANAGER.get_provider()
                 await cancel_active_turn("continue")
-                active_turn = asyncio.create_task(orchestrator.handle_continue())
+                active_turn = asyncio.create_task(orchestrator.handle_continue(mode=mode))
             elif message_type == "system_prompt.update":
-                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")))
-                await sink.emit("system_prompt.updated", enabled=bool(orchestrator.state.system_prompt))
+                RUNTIME_SETTINGS.active_mode = mode
+                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")), mode=mode)
+                await sink.emit("system_prompt.updated", mode=mode, enabled=bool(orchestrator.state.system_prompt))
             elif message_type == "conversation.clear":
                 await cancel_active_turn("conversation_clear")
-                await orchestrator.clear_conversation()
+                await orchestrator.clear_conversation(mode=mode)
             elif message_type == "tts.cancel":
                 await orchestrator.cancel_tts("manual")
             elif message_type == "vad.speech_start":
-                orchestrator.set_system_prompt(str(payload.get("system_prompt", orchestrator.state.system_prompt)))
+                RUNTIME_SETTINGS.active_mode = mode
+                orchestrator.set_system_prompt(str(payload.get("system_prompt", orchestrator.state.system_prompt)), mode=mode)
                 await orchestrator.cancel_tts("barge_in")
-                await sink.emit("vad.speech_start", source="browser")
+                await sink.emit("vad.speech_start", mode=mode, source="browser")
             elif message_type == "audio.frame":
                 try:
                     frame = parse_audio_frame(payload, audio_stats)
@@ -463,9 +539,10 @@ async def websocket_events(websocket: WebSocket) -> None:
                                 )
                                 pcm = b""
                         if pcm and (not active_turn or active_turn.done()):
+                            RUNTIME_SETTINGS.active_mode = "chat"
                             orchestrator.providers.tts = TTS_MANAGER.get_provider()
                             active_turn = asyncio.create_task(
-                                orchestrator.handle_audio_turn(pcm, audio_stats.expected_sample_rate)
+                                orchestrator.handle_audio_turn(pcm, audio_stats.expected_sample_rate, mode="chat")
                             )
                     elif vad_event.type == "vad.probability":
                         await sink.emit(
@@ -495,3 +572,4 @@ async def websocket_events(websocket: WebSocket) -> None:
         TTS_CANCEL_HOOKS.discard(cancel_hook)
         TURN_CONFIG_HOOKS.discard(turn_config_hook)
         CHARACTER_SEED_HOOKS.discard(seed_hook)
+        COMPANION_HISTORY_HOOKS.discard(companion_history_hook)

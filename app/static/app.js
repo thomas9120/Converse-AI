@@ -1,6 +1,7 @@
 const state = {
   ws: null,
   assistantNode: null,
+  companionAssistantNode: null,
   audioQueue: [],
   playing: false,
   playbackStarted: false,
@@ -18,6 +19,7 @@ const state = {
   pendingTtsVoiceId: null,
   settings: null,
   settingsBusy: false,
+  view: "chat",
   samplerDefaults: {
     temperature: 0.7,
     max_tokens: 256,
@@ -62,6 +64,7 @@ const ttsUnloadButton = document.querySelector("#tts-unload");
 const ttsRuntimeStateEl = document.querySelector("#tts-runtime-state");
 const ttsRuntimeSummaryEl = document.querySelector("#tts-runtime-summary");
 const tabChatButton = document.querySelector("#tab-chat");
+const tabCompanionButton = document.querySelector("#tab-companion");
 const tabSettingsButton = document.querySelector("#tab-settings");
 const shellEl = document.querySelector(".shell");
 const userNameInput = document.querySelector("#user-name");
@@ -83,6 +86,25 @@ const characterDescEl = document.querySelector("#character-description");
 const characterFullEl = document.querySelector("#character-full");
 const characterClearButton = document.querySelector("#character-clear");
 const additionalSystemPromptInput = document.querySelector("#additional-system-prompt");
+const companionConversationEl = document.querySelector("#companion-conversation");
+const companionComposer = document.querySelector("#companion-composer");
+const companionTextInput = document.querySelector("#companion-text");
+const companionSendButton = document.querySelector("#companion-send");
+const companionContinueButton = document.querySelector("#companion-continue-btn");
+const companionUserNameInput = document.querySelector("#companion-user-name");
+const companionAiNameInput = document.querySelector("#companion-ai-name");
+const companionMemoryEnabledInput = document.querySelector("#companion-memory-enabled");
+const companionSystemPromptInput = document.querySelector("#companion-system-prompt");
+const companionMemoryInput = document.querySelector("#companion-memory");
+const memorySaveButton = document.querySelector("#memory-save");
+const memorySummarizeButton = document.querySelector("#memory-summarize");
+const memoryClearButton = document.querySelector("#memory-clear");
+const memoryStatusEl = document.querySelector("#memory-status");
+const companionSamplerTemperature = document.querySelector("#companion-sampler-temperature");
+const companionSamplerTopP = document.querySelector("#companion-sampler-top-p");
+const companionSamplerMinP = document.querySelector("#companion-sampler-min-p");
+const companionSamplerMaxTokens = document.querySelector("#companion-sampler-max-tokens");
+const companionSamplerResetButton = document.querySelector("#companion-sampler-reset");
 let systemPromptTimer = null;
 let settingsSaveTimer = null;
 
@@ -248,11 +270,14 @@ function connect() {
     updateSendState();
     updateMicState();
     sendSystemPromptUpdate();
+    sendCompanionPromptUpdate();
     addSystemMessage("Connected");
   });
   state.ws.addEventListener("close", () => {
     connectButton.textContent = "Connect";
     sendButton.disabled = true;
+    companionSendButton.disabled = true;
+    companionContinueButton.disabled = true;
     bargeButton.disabled = true;
     stopAudioButton.disabled = true;
     clearButton.disabled = true;
@@ -267,6 +292,7 @@ function connect() {
 function handleEvent(event) {
   addEvent(event.type);
   const payload = event.payload || {};
+  const mode = payload.mode || "chat";
   if (event.type === "providers.status") {
     renderProviders(payload.providers, payload.summary || []);
     renderTtsRuntime(payload.tts_runtime || state.ttsRuntime);
@@ -278,7 +304,7 @@ function handleEvent(event) {
   } else if (event.type === "asr.transcript" && payload.final) {
     updateAsrState(false, "ASR done");
     setLatency("ASR final", payload.latency_ms);
-    addMessage("user", payload.text);
+    addMessage("user", payload.text, mode);
   } else if (event.type === "asr.started") {
     updateAsrState(true, "ASR transcribing");
   } else if (event.type === "asr.progress") {
@@ -289,13 +315,19 @@ function handleEvent(event) {
     updateAsrState(false, payload.message);
   } else if (event.type === "llm.first_token") {
     setLatency("LLM first token", payload.latency_ms);
-    state.assistantNode = addMessage("assistant", "");
-  } else if (event.type === "llm.token") {
-    if (!state.assistantNode) {
-      state.assistantNode = addMessage("assistant", "");
+    if (mode === "companion") {
+      state.companionAssistantNode = addMessage("assistant", "", "companion");
+    } else {
+      state.assistantNode = addMessage("assistant", "", "chat");
     }
-    state.assistantNode.textContent = payload.accumulated;
-    conversationEl.scrollTop = conversationEl.scrollHeight;
+  } else if (event.type === "llm.token") {
+    const nodeKey = mode === "companion" ? "companionAssistantNode" : "assistantNode";
+    if (!state[nodeKey]) {
+      state[nodeKey] = addMessage("assistant", "", mode);
+    }
+    state[nodeKey].textContent = payload.accumulated;
+    const target = conversationForMode(mode);
+    target.scrollTop = target.scrollHeight;
   } else if (event.type === "tts.first_chunk") {
     updateTtsState(true, "TTS playing");
     setLatency("TTS first chunk", payload.latency_ms);
@@ -323,32 +355,38 @@ function handleEvent(event) {
     vadStateEl.dataset.speaking = "false";
   } else if (event.type === "turn.finished") {
     setLatency("Turn complete", payload.latency_ms);
-    state.assistantNode = null;
+    if (mode === "companion") state.companionAssistantNode = null;
+    else state.assistantNode = null;
     updateTtsState(false, "TTS idle");
   } else if (event.type === "turn.error") {
-    addSystemMessage(`Error: ${payload.message}`);
+    addMessage("system", `Error: ${payload.message}`, mode);
   } else if (event.type === "tts.cancelled") {
     stopAudio();
     updateTtsState(false, "TTS cancelled");
   } else if (event.type === "conversation.cleared") {
-    conversationEl.innerHTML = "";
+    conversationForMode(mode).innerHTML = "";
     latencyEl.innerHTML = "";
-    addSystemMessage("Conversation cleared");
+    addMessage("system", "Conversation cleared", mode);
   } else if (event.type === "conversation.seeded") {
-    addMessage(payload.role || "assistant", payload.text || "");
+    addMessage(payload.role || "assistant", payload.text || "", mode);
   } else if (event.type === "settings.updated") {
     applySettings(payload);
   }
 }
 
-function addMessage(kind, text) {
+function conversationForMode(mode) {
+  return mode === "companion" ? companionConversationEl : conversationEl;
+}
+
+function addMessage(kind, text, mode = "chat") {
   const node = document.createElement("div");
   node.className = `message ${kind}`;
   if (text) {
     node.textContent = text;
   }
-  conversationEl.appendChild(node);
-  conversationEl.scrollTop = conversationEl.scrollHeight;
+  const target = conversationForMode(mode);
+  target.appendChild(node);
+  target.scrollTop = target.scrollHeight;
   return node;
 }
 
@@ -371,6 +409,8 @@ function updateSendState() {
   const connected = state.ws && state.ws.readyState === WebSocket.OPEN;
   sendButton.disabled = !connected || !state.providersReady;
   continueButton.disabled = !connected || !state.providersReady;
+  companionSendButton.disabled = !connected || !state.providersReady;
+  companionContinueButton.disabled = !connected || !state.providersReady;
   clearButton.disabled = !connected;
   stopAudioButton.disabled = !connected;
   updateMicState();
@@ -602,6 +642,7 @@ function applySettings(settings) {
   state.settings = settings;
   renderNames();
   renderSampler();
+  renderCompanionSettings();
   renderCharacter();
   additionalSystemPromptInput.value = settings.additional_system_prompt || "";
 }
@@ -629,6 +670,39 @@ function renderSampler() {
     frequency_penalty: samplerFrequencyPenalty,
     presence_penalty: samplerPresencePenalty,
     max_tokens: samplerMaxTokens,
+  };
+  for (const [key, input] of Object.entries(samplerInputs)) {
+    if (document.activeElement === input) continue;
+    if (key in overrides && overrides[key] !== null && overrides[key] !== undefined) {
+      input.value = overrides[key];
+    } else if (key in display) {
+      input.value = display[key];
+    } else {
+      input.value = "";
+    }
+  }
+}
+
+function renderCompanionSettings() {
+  if (!state.settings) return;
+  const companion = state.settings.companion || {};
+  if (document.activeElement !== companionUserNameInput) {
+    companionUserNameInput.value = companion.user_name || "";
+  }
+  if (document.activeElement !== companionAiNameInput) {
+    companionAiNameInput.value = companion.ai_name || "";
+  }
+  if (document.activeElement !== companionSystemPromptInput) {
+    companionSystemPromptInput.value = companion.system_prompt || "";
+  }
+  companionMemoryEnabledInput.checked = companion.memory_enabled !== false;
+  const display = companion.sampler_display || {};
+  const overrides = companion.llm_overrides || {};
+  const samplerInputs = {
+    temperature: companionSamplerTemperature,
+    top_p: companionSamplerTopP,
+    min_p: companionSamplerMinP,
+    max_tokens: companionSamplerMaxTokens,
   };
   for (const [key, input] of Object.entries(samplerInputs)) {
     if (document.activeElement === input) continue;
@@ -689,6 +763,26 @@ function collectSamplerOverrides() {
   return overrides;
 }
 
+function collectCompanionSamplerOverrides() {
+  const overrides = {};
+  const pairs = [
+    ["temperature", companionSamplerTemperature],
+    ["top_p", companionSamplerTopP],
+    ["min_p", companionSamplerMinP],
+    ["max_tokens", companionSamplerMaxTokens],
+  ];
+  for (const [key, input] of pairs) {
+    const val = input.value.trim();
+    if (val === "") {
+      overrides[key] = null;
+    } else {
+      const num = Number(val);
+      if (!isNaN(num)) overrides[key] = num;
+    }
+  }
+  return overrides;
+}
+
 async function saveSettingsDebounced() {
   window.clearTimeout(settingsSaveTimer);
   settingsSaveTimer = window.setTimeout(async () => {
@@ -707,6 +801,28 @@ async function saveSettingsDebounced() {
   }, 400);
 }
 
+async function saveCompanionSettingsDebounced() {
+  window.clearTimeout(settingsSaveTimer);
+  settingsSaveTimer = window.setTimeout(async () => {
+    const patch = {
+      active_mode: "companion",
+      companion: {
+        user_name: companionUserNameInput.value.trim() || "You",
+        ai_name: companionAiNameInput.value.trim() || "Companion",
+        system_prompt: companionSystemPromptInput.value.trim(),
+        memory_enabled: companionMemoryEnabledInput.checked,
+        llm_overrides: collectCompanionSamplerOverrides(),
+      },
+    };
+    try {
+      const result = await patchJson("/api/settings", patch);
+      applySettings(result);
+    } catch (error) {
+      memoryStatusEl.textContent = `Companion settings failed: ${error.message}`;
+    }
+  }, 400);
+}
+
 async function resetSampler() {
   const patch = { llm_overrides: {} };
   try {
@@ -714,6 +830,15 @@ async function resetSampler() {
     applySettings(result);
   } catch (error) {
     audioStatusEl.textContent = `Sampler reset failed: ${error.message}`;
+  }
+}
+
+async function resetCompanionSampler() {
+  try {
+    const result = await patchJson("/api/settings", { companion: { llm_overrides: {} } });
+    applySettings(result);
+  } catch (error) {
+    memoryStatusEl.textContent = `Companion sampler reset failed: ${error.message}`;
   }
 }
 
@@ -764,9 +889,14 @@ async function clearCharacter() {
 }
 
 function switchTab(tab) {
+  state.view = tab;
   shellEl.dataset.view = tab;
   tabChatButton.classList.toggle("active", tab === "chat");
+  tabCompanionButton.classList.toggle("active", tab === "companion");
   tabSettingsButton.classList.toggle("active", tab === "settings");
+  if (tab === "companion") {
+    loadMemory();
+  }
 }
 
 function enqueueAudio(payload) {
@@ -904,8 +1034,63 @@ function sendSystemPromptUpdate() {
   }
   state.ws.send(JSON.stringify({
     type: "system_prompt.update",
-    payload: { system_prompt: systemPromptInput.value },
+    payload: { mode: "chat", system_prompt: systemPromptInput.value },
   }));
+}
+
+function sendCompanionPromptUpdate() {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  state.ws.send(JSON.stringify({
+    type: "system_prompt.update",
+    payload: { mode: "companion", system_prompt: companionSystemPromptInput.value },
+  }));
+}
+
+async function loadMemory() {
+  try {
+    const response = await fetch("/api/companion/memory");
+    const payload = await response.json();
+    companionMemoryInput.value = payload.text || "";
+    memoryStatusEl.textContent = payload.metadata?.exists
+      ? `Memory loaded - ${payload.metadata.chars} chars`
+      : "No saved memory yet";
+  } catch (error) {
+    memoryStatusEl.textContent = `Memory load failed: ${error.message}`;
+  }
+}
+
+async function saveMemory() {
+  try {
+    const payload = await putJson("/api/companion/memory", { text: companionMemoryInput.value });
+    companionMemoryInput.value = payload.text || "";
+    memoryStatusEl.textContent = `Memory saved - ${payload.metadata.chars} chars`;
+  } catch (error) {
+    memoryStatusEl.textContent = `Memory save failed: ${error.message}`;
+  }
+}
+
+async function summarizeMemory() {
+  memoryStatusEl.textContent = "Summarizing companion chat...";
+  try {
+    const payload = await postJson("/api/companion/memory/summarize", {});
+    companionMemoryInput.value = payload.text || "";
+    memoryStatusEl.textContent = `Memory summarized - ${payload.metadata.chars} chars`;
+  } catch (error) {
+    memoryStatusEl.textContent = `Memory summarize failed: ${error.message}`;
+  }
+}
+
+async function clearMemory() {
+  try {
+    const response = await fetch("/api/companion/memory", { method: "DELETE" });
+    const payload = await response.json();
+    companionMemoryInput.value = payload.text || "";
+    memoryStatusEl.textContent = "Memory cleared";
+  } catch (error) {
+    memoryStatusEl.textContent = `Memory clear failed: ${error.message}`;
+  }
 }
 
 function applyTheme(theme) {
@@ -918,6 +1103,25 @@ function applyTheme(theme) {
 async function postJson(url, body = {}) {
   const response = await fetch(url, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    let message = `${response.status}`;
+    try {
+      const payload = await response.json();
+      message = payload.detail || message;
+    } catch (error) {
+      // Fall back to status text.
+    }
+    throw new Error(message);
+  }
+  return await response.json();
+}
+
+async function putJson(url, body = {}) {
+  const response = await fetch(url, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -964,7 +1168,7 @@ composer.addEventListener("submit", (event) => {
   state.playbackStarted = false;
   state.ws.send(JSON.stringify({
     type: "user.text",
-    payload: { text, system_prompt: systemPromptInput.value },
+    payload: { mode: "chat", text, system_prompt: systemPromptInput.value },
   }));
   textInput.value = "";
 });
@@ -977,7 +1181,34 @@ continueButton.addEventListener("click", () => {
   state.playbackStarted = false;
   state.ws.send(JSON.stringify({
     type: "user.continue",
-    payload: {},
+    payload: { mode: "chat" },
+  }));
+});
+
+companionComposer.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const text = companionTextInput.value.trim();
+  if (!text || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  latencyEl.innerHTML = "";
+  state.playbackStarted = false;
+  state.ws.send(JSON.stringify({
+    type: "user.text",
+    payload: { mode: "companion", text, system_prompt: companionSystemPromptInput.value },
+  }));
+  companionTextInput.value = "";
+});
+
+companionContinueButton.addEventListener("click", () => {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  latencyEl.innerHTML = "";
+  state.playbackStarted = false;
+  state.ws.send(JSON.stringify({
+    type: "user.continue",
+    payload: { mode: "companion" },
   }));
 });
 
@@ -995,7 +1226,7 @@ bargeButton.addEventListener("click", () => {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
     state.ws.send(JSON.stringify({
       type: "vad.speech_start",
-      payload: { system_prompt: systemPromptInput.value },
+      payload: { mode: state.view === "companion" ? "companion" : "chat", system_prompt: state.view === "companion" ? companionSystemPromptInput.value : systemPromptInput.value },
     }));
   }
 });
@@ -1009,9 +1240,9 @@ stopAudioButton.addEventListener("click", () => {
 clearButton.addEventListener("click", () => {
   stopAudio();
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ type: "conversation.clear", payload: {} }));
+    state.ws.send(JSON.stringify({ type: "conversation.clear", payload: { mode: state.view === "companion" ? "companion" : "chat" } }));
   } else {
-    conversationEl.innerHTML = "";
+    conversationForMode(state.view === "companion" ? "companion" : "chat").innerHTML = "";
     latencyEl.innerHTML = "";
   }
 });
@@ -1044,11 +1275,21 @@ ttsUnloadButton.addEventListener("click", () => {
 });
 
 tabChatButton.addEventListener("click", () => switchTab("chat"));
+tabCompanionButton.addEventListener("click", () => switchTab("companion"));
 tabSettingsButton.addEventListener("click", () => switchTab("settings"));
 
 userNameInput.addEventListener("input", saveSettingsDebounced);
 aiNameInput.addEventListener("input", saveSettingsDebounced);
 additionalSystemPromptInput.addEventListener("input", saveSettingsDebounced);
+companionUserNameInput.addEventListener("input", saveCompanionSettingsDebounced);
+companionAiNameInput.addEventListener("input", saveCompanionSettingsDebounced);
+companionMemoryEnabledInput.addEventListener("change", saveCompanionSettingsDebounced);
+companionSystemPromptInput.addEventListener("input", () => {
+  saveCompanionSettingsDebounced();
+  window.clearTimeout(systemPromptTimer);
+  systemPromptTimer = window.setTimeout(sendCompanionPromptUpdate, 350);
+});
+companionSystemPromptInput.addEventListener("change", sendCompanionPromptUpdate);
 
 const samplerInputs = [
   samplerTemperature, samplerTopK, samplerTopP, samplerMinP,
@@ -1058,6 +1299,13 @@ for (const input of samplerInputs) {
   input.addEventListener("input", saveSettingsDebounced);
 }
 samplerResetButton.addEventListener("click", resetSampler);
+for (const input of [companionSamplerTemperature, companionSamplerTopP, companionSamplerMinP, companionSamplerMaxTokens]) {
+  input.addEventListener("input", saveCompanionSettingsDebounced);
+}
+companionSamplerResetButton.addEventListener("click", resetCompanionSampler);
+memorySaveButton.addEventListener("click", saveMemory);
+memorySummarizeButton.addEventListener("click", summarizeMemory);
+memoryClearButton.addEventListener("click", clearMemory);
 
 characterDrop.addEventListener("click", () => characterFile.click());
 characterDrop.addEventListener("dragover", (event) => {
@@ -1083,4 +1331,5 @@ characterClearButton.addEventListener("click", clearCharacter);
 loadStatus().catch((error) => {
   profileEl.textContent = `Status failed: ${error.message}`;
 });
+loadMemory();
 applyTheme(localStorage.getItem("harness-theme") || "light");
