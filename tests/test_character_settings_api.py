@@ -5,7 +5,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 import conversational_harness.main as main
-from conversational_harness.runtime_settings import RuntimeSettings
+from conversational_harness.providers.factory import ProviderBundle
+from conversational_harness.providers.mock import MockASRProvider, MockTTSProvider, MockVADProvider
+from conversational_harness.runtime_settings import MemoryStore, RuntimeSettings
 
 
 @pytest.fixture(autouse=True)
@@ -15,6 +17,9 @@ def isolated_runtime_settings(monkeypatch):
         profile_defaults=dict(original.profile_defaults),
         server_defaults=dict(original.server_defaults),
     )
+    original_memory = main.MEMORY_STORE
+    main.MEMORY_STORE = MemoryStore(original_memory.path.parent / "test-memory.md")
+    main.MEMORY_STORE.clear()
 
     async def broadcast_noop():
         return None
@@ -22,6 +27,8 @@ def isolated_runtime_settings(monkeypatch):
     monkeypatch.setattr(main, "save_runtime_settings", lambda settings: None)
     monkeypatch.setattr(main, "broadcast_settings", broadcast_noop)
     yield
+    main.MEMORY_STORE.clear()
+    main.MEMORY_STORE = original_memory
     main.RUNTIME_SETTINGS = original
 
 
@@ -99,3 +106,79 @@ def test_character_upload_rejects_malformed_json(client):
 
     assert response.status_code == 400
     assert response.json()["detail"].startswith("Invalid character card")
+
+
+def test_memory_api_read_write_and_delete(client):
+    response = client.get("/api/companion/memory")
+    assert response.status_code == 200
+    assert response.json()["text"] == ""
+
+    response = client.put("/api/companion/memory", json={"text": "User likes quiet mornings."})
+    assert response.status_code == 200
+    assert "quiet mornings" in response.json()["text"]
+
+    response = client.delete("/api/companion/memory")
+    assert response.status_code == 200
+    assert response.json()["text"] == ""
+
+
+def test_memory_summarize_uses_companion_history(client, monkeypatch):
+    class SummaryLLM:
+        def set_runtime_settings(self, settings):
+            self.settings = settings
+
+        async def stream_response(self, messages):
+            yield "- User likes concise memory."
+
+    monkeypatch.setattr(
+        main,
+        "build_provider_bundle",
+        lambda *args, **kwargs: ProviderBundle(
+            MockVADProvider({}),
+            MockASRProvider({}),
+            SummaryLLM(),
+            MockTTSProvider({}),
+        ),
+    )
+    main.COMPANION_HISTORY_HOOKS.add(lambda: [{"role": "user", "content": "Remember concise memory."}])
+    try:
+        response = client.post("/api/companion/memory/summarize", json={})
+    finally:
+        main.COMPANION_HISTORY_HOOKS.clear()
+
+    assert response.status_code == 200
+    assert "User likes concise memory" in response.json()["text"]
+
+
+def test_memory_summarize_accepts_posted_companion_transcript(client, monkeypatch):
+    class SummaryLLM:
+        def set_runtime_settings(self, settings):
+            self.settings = settings
+
+        async def stream_response(self, messages):
+            assert {"role": "user", "content": "Visible companion text."} in messages
+            yield "- Visible companion text should be remembered."
+
+    monkeypatch.setattr(
+        main,
+        "build_provider_bundle",
+        lambda *args, **kwargs: ProviderBundle(
+            MockVADProvider({}),
+            MockASRProvider({}),
+            SummaryLLM(),
+            MockTTSProvider({}),
+        ),
+    )
+
+    response = client.post(
+        "/api/companion/memory/summarize",
+        json={
+            "messages": [
+                {"role": "system", "content": "Memory summarized"},
+                {"role": "user", "content": "Visible companion text."},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Visible companion text should be remembered" in response.json()["text"]

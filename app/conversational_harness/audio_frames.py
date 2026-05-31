@@ -110,3 +110,28 @@ def compute_pcm16_level(data: bytes) -> dict[str, float]:
     peak = float(np.abs(arr).max())
     rms = float(np.sqrt(np.mean(arr**2)))
     return {"rms": round(rms, 4), "peak": round(peak, 4)}
+
+
+def trim_pcm16_silence(data: bytes, *, frame_ms: int, sample_rate: int, rms_threshold: float) -> bytes:
+    if not data or rms_threshold <= 0:
+        return data
+    bytes_per_frame = max(1, sample_rate * frame_ms // 1000 * 2)
+    frames = [
+        data[index : index + bytes_per_frame]
+        for index in range(0, len(data), bytes_per_frame)
+        if len(data[index : index + bytes_per_frame]) == bytes_per_frame
+    ]
+    if not frames:
+        return data
+
+    start = 0
+    while start < len(frames) and compute_pcm16_level(frames[start])["rms"] < rms_threshold:
+        start += 1
+
+    end = len(frames) - 1
+    while end >= start and compute_pcm16_level(frames[end])["rms"] < rms_threshold:
+        end -= 1
+
+    if start > end:
+        return b""
+    return b"".join(frames[start : end + 1])

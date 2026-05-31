@@ -3,7 +3,7 @@ import asyncio
 from conversational_harness.config import load_config
 from conversational_harness.orchestrator import ConversationOrchestrator, QueueEventSink, should_flush_tts
 from conversational_harness.providers import build_providers
-from conversational_harness.runtime_settings import CharacterCard, RuntimeSettings
+from conversational_harness.runtime_settings import CharacterCard, MemoryStore, RuntimeSettings
 
 
 class RecordingLLM:
@@ -22,6 +22,13 @@ class RecordingLLM:
         yield "ok."
 
 
+class SlowLLM:
+    async def stream_response(self, messages):
+        yield "still "
+        await asyncio.sleep(0)
+        yield "companion."
+
+
 def test_should_flush_tts_on_sentence_or_limit():
     assert should_flush_tts("Hello there.", 120)
     assert should_flush_tts("x" * 121, 120)
@@ -35,7 +42,9 @@ def test_text_turn_emits_core_events():
         config = load_config("profiles/mock-local.json")
         providers = build_providers(config)
         queue = asyncio.Queue()
-        orchestrator = ConversationOrchestrator(providers, QueueEventSink(queue), tts_chunk_chars=60)
+        orchestrator = ConversationOrchestrator(
+            providers, QueueEventSink(queue), tts_chunk_chars=60
+        )
 
         await orchestrator.handle_text_turn("hello harness")
         await asyncio.sleep(0.15)
@@ -170,7 +179,7 @@ def test_character_first_message_seeds_empty_conversation():
     assert seeded is True
     assert messages == [{"role": "assistant", "content": "Hello, Mara. I am Lyra."}]
     assert event["type"] == "conversation.seeded"
-    assert event["payload"] == {"role": "assistant", "text": "Hello, Mara. I am Lyra."}
+    assert event["payload"] == {"mode": "chat", "role": "assistant", "text": "Hello, Mara. I am Lyra."}
 
 
 def test_character_first_message_seed_is_noop_when_history_exists():
@@ -195,6 +204,109 @@ def test_character_first_message_seed_is_noop_when_history_exists():
     assert seeded is False
     assert messages == [{"role": "user", "content": "Already here"}]
     assert no_events is True
+
+
+def test_character_first_message_seed_is_noop_for_companion_mode():
+    async def run_seed():
+        config = load_config("profiles/mock-local.json")
+        providers = build_providers(config)
+        queue = asyncio.Queue()
+        settings = RuntimeSettings(character=CharacterCard(name="Lyra", first_mes="Hello."))
+        orchestrator = ConversationOrchestrator(
+            providers,
+            QueueEventSink(queue),
+            tts_chunk_chars=60,
+            runtime_settings=settings,
+        )
+
+        seeded = await orchestrator.seed_character_first_message(mode="companion")
+        return seeded, orchestrator.messages_for_mode("companion"), queue.empty()
+
+    seeded, messages, no_events = asyncio.run(run_seed())
+
+    assert seeded is False
+    assert messages == []
+    assert no_events is True
+
+
+def test_companion_memory_is_injected_only_in_companion_mode(tmp_path):
+    async def run_turns():
+        config = load_config("profiles/mock-local.json")
+        providers = build_providers(config)
+        llm = RecordingLLM()
+        providers.llm = llm
+        queue = asyncio.Queue()
+        settings = RuntimeSettings()
+        settings.companion.system_prompt = "Be a steady companion."
+        memory = MemoryStore(tmp_path / "memory.md")
+        memory.write("The user likes concise answers.")
+        orchestrator = ConversationOrchestrator(
+            providers,
+            QueueEventSink(queue),
+            tts_chunk_chars=60,
+            runtime_settings=settings,
+            memory_store=memory,
+        )
+
+        await orchestrator.handle_text_turn("hello", mode="chat")
+        await orchestrator.handle_text_turn("hello", mode="companion")
+        await asyncio.sleep(0.05)
+        return llm.messages
+
+    messages = asyncio.run(run_turns())
+
+    assert "Long-term memory" not in messages[0][0].get("content", "")
+    assert "Long-term memory" in messages[1][0]["content"]
+    assert "The user likes concise answers." in messages[1][0]["content"]
+
+
+def test_companion_and_chat_histories_are_separate():
+    async def run_turns():
+        config = load_config("profiles/mock-local.json")
+        providers = build_providers(config)
+        queue = asyncio.Queue()
+        orchestrator = ConversationOrchestrator(providers, QueueEventSink(queue), tts_chunk_chars=60)
+
+        await orchestrator.handle_text_turn("chat hello", mode="chat")
+        await orchestrator.handle_text_turn("companion hello", mode="companion")
+        await asyncio.sleep(0.15)
+        return orchestrator.messages_for_mode("chat"), orchestrator.messages_for_mode("companion")
+
+    chat_messages, companion_messages = asyncio.run(run_turns())
+
+    assert chat_messages[0]["content"] == "chat hello"
+    assert companion_messages[0]["content"] == "companion hello"
+
+
+def test_companion_turn_keeps_mode_if_chat_state_is_selected_mid_stream():
+    async def run_turn():
+        config = load_config("profiles/mock-local.json")
+        providers = build_providers(config)
+        providers.llm = SlowLLM()
+        queue = asyncio.Queue()
+        orchestrator = ConversationOrchestrator(providers, QueueEventSink(queue), tts_chunk_chars=60)
+
+        companion_turn = asyncio.create_task(
+            orchestrator.handle_text_turn("companion hello", mode="companion")
+        )
+        await asyncio.sleep(0)
+        orchestrator.set_system_prompt("chat prompt", mode="chat")
+        await companion_turn
+        await asyncio.sleep(0.15)
+
+        events = []
+        while not queue.empty():
+            events.append(await queue.get())
+        return [
+            event["payload"].get("mode")
+            for event in events
+            if event["type"] in {"asr.transcript", "llm.first_token", "llm.token", "turn.finished"}
+        ]
+
+    modes = asyncio.run(run_turn())
+
+    assert modes
+    assert set(modes) == {"companion"}
 
 
 def test_clear_conversation_removes_history():

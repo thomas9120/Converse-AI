@@ -38,6 +38,11 @@ This project is intended to become a local, modular conversational AI harness fo
 - The duration gate is more robust than threshold tuning alone because real speech is almost always >200ms regardless of volume. Threshold tuning is a softer first filter.
 - `min_speech_duration_ms` defaults to 0 (disabled) if not specified in the profile, so existing profiles are unaffected.
 - The duration gate lives in `main.py` (the orchestration layer), not in `SileroVADProvider`, because the provider only sees individual frames and doesn't know about utterance boundaries.
+- For faster-whisper large-v3-turbo, silence can hallucinate phrases such as "thank you". The current effective mitigation stack is:
+  - Silero profile settings: `speech_threshold: 0.65`, `neg_threshold: 0.4`, `min_speech_duration_ms: 300`.
+  - faster-whisper settings: `condition_on_previous_text: false`, `temperature: 0`, `compression_ratio_threshold: 2.4`, `log_prob_threshold: -0.5`, `no_speech_threshold: 0.2`.
+  - Pre-ASR guards in `main.py`: `reject_low_energy_rms: 0.003` for utterances up to `reject_low_energy_max_duration_ms: 900`, whole-utterance floor `reject_utterance_rms: 0.002`, and edge trimming with `trim_silence_rms: 0.003` / `trim_silence_frame_ms: 30`.
+- Keep these values profile-driven. If hallucinations return, tune VAD/energy/trim thresholds before adding phrase-specific text filters, because users can genuinely say phrases like "thank you".
 
 ## Installation And Runtime Mistakes To Avoid
 

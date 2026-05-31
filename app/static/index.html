@@ -16,6 +16,7 @@
         <div class="controls">
           <nav class="tab-nav">
             <button id="tab-chat" class="tab active" type="button">Chat</button>
+            <button id="tab-companion" class="tab" type="button">Companion</button>
             <button id="tab-settings" class="tab" type="button">Settings</button>
           </nav>
           <button id="theme-toggle" type="button">Dark Mode</button>
@@ -80,6 +81,55 @@
           <input id="text" autocomplete="off" placeholder="Type a test utterance while the audio path is being wired..." aria-label="Utterance">
           <button id="continue-btn" type="button" disabled>Continue</button>
           <button id="send" type="submit" disabled>Send</button>
+        </form>
+      </section>
+
+      <section class="view-companion">
+        <section class="companion-config">
+          <div class="settings-row">
+            <label for="companion-user-name">Your name</label>
+            <input id="companion-user-name" type="text" placeholder="You" autocomplete="off">
+          </div>
+          <div class="settings-row">
+            <label for="companion-ai-name">AI name</label>
+            <input id="companion-ai-name" type="text" placeholder="Companion" autocomplete="off">
+          </div>
+          <div class="settings-row">
+            <label for="companion-memory-enabled">Memory</label>
+            <input id="companion-memory-enabled" type="checkbox">
+          </div>
+          <div class="settings-row wide">
+            <label for="companion-system-prompt">Companion prompt</label>
+            <textarea id="companion-system-prompt" rows="3" placeholder="Persistent companion-mode instructions."></textarea>
+          </div>
+        </section>
+
+        <section class="workspace companion-workspace">
+          <section class="conversation" id="companion-conversation" aria-live="polite"></section>
+          <aside class="side companion-side">
+            <h2>Memory</h2>
+            <textarea id="companion-memory" rows="10" placeholder="No saved memory yet."></textarea>
+            <div class="settings-actions">
+              <button id="memory-save" type="button">Save Memory</button>
+              <button id="memory-summarize" type="button">Summarize Chat</button>
+              <button id="memory-clear" type="button">Clear Memory</button>
+            </div>
+            <p id="memory-status" class="settings-hint">Memory idle</p>
+            <h2>Sampler</h2>
+            <div class="compact-sampler">
+              <input id="companion-sampler-temperature" type="number" step="0.05" min="0" max="2" aria-label="Temperature" placeholder="Temperature">
+              <input id="companion-sampler-top-p" type="number" step="0.05" min="0" max="1" aria-label="Top P" placeholder="Top P">
+              <input id="companion-sampler-min-p" type="number" step="0.05" min="0" max="1" aria-label="Min P" placeholder="Min P">
+              <input id="companion-sampler-max-tokens" type="number" step="1" min="1" aria-label="Max Tokens" placeholder="Max Tokens">
+            </div>
+            <button id="companion-sampler-reset" type="button">Reset Companion Sampler</button>
+          </aside>
+        </section>
+
+        <form class="composer" id="companion-composer">
+          <input id="companion-text" autocomplete="off" placeholder="Talk with companion mode..." aria-label="Companion utterance">
+          <button id="companion-continue-btn" type="button" disabled>Continue</button>
+          <button id="companion-send" type="submit" disabled>Send</button>
         </form>
       </section>
 

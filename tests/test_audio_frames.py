@@ -3,7 +3,12 @@ import struct
 
 import pytest
 
-from conversational_harness.audio_frames import AudioFrameStats, compute_pcm16_level, parse_audio_frame
+from conversational_harness.audio_frames import (
+    AudioFrameStats,
+    compute_pcm16_level,
+    parse_audio_frame,
+    trim_pcm16_silence,
+)
 
 
 def make_payload(sequence=0, sample_rate=16000, channels=1, frame_ms=30, samples=None):
@@ -56,3 +61,21 @@ def test_audio_frame_stats_tracks_dropped_frames():
 
     assert metrics is not None
     assert metrics["dropped_frames"] == 2
+
+
+def test_trim_pcm16_silence_removes_quiet_edges():
+    quiet = [0] * 480
+    speech = [1200] * 480
+    data = struct.pack(f"<{len(quiet + speech + quiet)}h", *(quiet + speech + quiet))
+
+    trimmed = trim_pcm16_silence(data, frame_ms=30, sample_rate=16000, rms_threshold=0.003)
+
+    assert trimmed == struct.pack(f"<{len(speech)}h", *speech)
+
+
+def test_trim_pcm16_silence_returns_empty_for_all_quiet_audio():
+    data = struct.pack("<480h", *([0] * 480))
+
+    trimmed = trim_pcm16_silence(data, frame_ms=30, sample_rate=16000, rms_threshold=0.003)
+
+    assert trimmed == b""

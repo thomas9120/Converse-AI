@@ -53,6 +53,13 @@ textarea {
   font: inherit;
 }
 
+input,
+select,
+textarea {
+  max-width: 100%;
+  min-width: 0;
+}
+
 .shell {
   display: grid;
   grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
@@ -60,6 +67,10 @@ textarea {
   height: 100vh;
   overflow: hidden;
   padding: 18px;
+}
+
+[data-view="companion"] .prompt-panel {
+  display: none;
 }
 
 .topbar {
@@ -346,6 +357,7 @@ select {
 
 /* View switching */
 .view-chat,
+.view-companion,
 .view-settings {
   min-height: 0;
   overflow: hidden;
@@ -359,11 +371,30 @@ select {
   overflow: hidden;
 }
 
+[data-view="chat"] .view-companion,
 [data-view="chat"] .view-settings {
   display: none;
 }
 
+[data-view="companion"] .view-companion {
+  display: grid;
+  grid-template-rows: auto minmax(360px, 1fr) auto;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+[data-view="companion"] .view-chat,
+[data-view="companion"] .view-settings {
+  display: none;
+}
+
 [data-view="settings"] .view-chat {
+  display: none;
+}
+
+[data-view="settings"] .view-companion {
   display: none;
 }
 
@@ -378,6 +409,47 @@ select {
   gap: 14px;
   min-height: 0;
   overflow: hidden;
+}
+
+.companion-workspace {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  min-height: 360px;
+  overflow: visible;
+}
+
+.companion-config {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 12px;
+}
+
+.companion-config .settings-row {
+  margin-bottom: 0;
+}
+
+.companion-config .settings-row.wide {
+  grid-column: 1 / -1;
+}
+
+.companion-side {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  max-height: none;
+}
+
+.compact-sampler {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.compact-sampler input {
+  width: 100%;
 }
 
 .conversation,
@@ -426,6 +498,10 @@ select {
   gap: 8px;
   overflow: hidden;
   padding: 14px;
+}
+
+.companion-side textarea {
+  flex: 0 0 160px;
 }
 
 dl {
@@ -623,7 +699,8 @@ input:focus {
   }
 
   .topbar,
-  .workspace {
+  .workspace,
+  .companion-config {
     grid-template-columns: 1fr;
   }
 

@@ -8,6 +8,7 @@ import logging
 import struct
 from collections import deque
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +16,17 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from conversational_harness.audio_frames import AudioFrameStats, parse_audio_frame
+from conversational_harness.audio_frames import (
+    AudioFrameStats,
+    compute_pcm16_level,
+    parse_audio_frame,
+    trim_pcm16_silence,
+)
 from conversational_harness.config import PROJECT_ROOT, load_config
 from conversational_harness.orchestrator import ConversationOrchestrator, QueueEventSink
 from conversational_harness.providers.factory import build_provider_bundle, serialize_statuses
 from conversational_harness.runtime_settings import (
+    MemoryStore,
     RuntimeSettings,
     load_runtime_settings,
     parse_character_json,
@@ -50,10 +57,12 @@ app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 BASE_CONFIG = load_config()
 TTS_MANAGER = TTSRuntimeManager(BASE_CONFIG, load_tts_presets())
 RUNTIME_SETTINGS = load_runtime_settings(BASE_CONFIG.section("llm"))
+MEMORY_STORE = MemoryStore()
 ACTIVE_QUEUES: set[asyncio.Queue[dict[str, Any]]] = set()
 TTS_CANCEL_HOOKS: set[Any] = set()
 TURN_CONFIG_HOOKS: set[Any] = set()
 CHARACTER_SEED_HOOKS: set[Any] = set()
+COMPANION_HISTORY_HOOKS: set[Any] = set()
 
 
 async def _fetch_llm_server_defaults() -> None:
@@ -140,6 +149,80 @@ async def patch_settings(payload: dict[str, Any]) -> dict[str, Any]:
     save_runtime_settings(RUNTIME_SETTINGS)
     await broadcast_settings()
     return RUNTIME_SETTINGS.to_dict()
+
+
+@app.get("/api/companion/memory")
+async def get_companion_memory() -> dict[str, Any]:
+    return MEMORY_STORE.payload()
+
+
+@app.put("/api/companion/memory")
+async def put_companion_memory(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        MEMORY_STORE.write(str(payload.get("text", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MEMORY_STORE.payload()
+
+
+@app.delete("/api/companion/memory")
+async def delete_companion_memory() -> dict[str, Any]:
+    MEMORY_STORE.clear()
+    return MEMORY_STORE.payload()
+
+
+def _valid_summary_messages(raw_messages: Any) -> list[dict[str, str]]:
+    if not isinstance(raw_messages, list):
+        return []
+    messages: list[dict[str, str]] = []
+    for item in raw_messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip()
+        content = str(item.get("content", "")).strip()
+        if role in {"user", "assistant"} and content:
+            messages.append({"role": role, "content": content})
+    return messages
+
+
+@app.post("/api/companion/memory/summarize")
+async def summarize_companion_memory(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    messages = _valid_summary_messages((payload or {}).get("messages"))
+    for hook in list(COMPANION_HISTORY_HOOKS):
+        if messages:
+            break
+        messages = _valid_summary_messages(hook())
+    if not messages:
+        raise HTTPException(status_code=400, detail="No companion conversation to summarize")
+
+    providers = build_provider_bundle(BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider())
+    if hasattr(providers.llm, "set_runtime_settings"):
+        providers.llm.set_runtime_settings(RUNTIME_SETTINGS)
+    RUNTIME_SETTINGS.active_mode = "companion"
+    summary_prompt = [
+        {
+            "role": "system",
+            "content": (
+                "Summarize durable companion memory from this conversation. "
+                "Keep stable user preferences, personal facts, relationship context, and ongoing plans. "
+                "Omit transient wording, filler, and anything uncertain. Use concise Markdown bullets."
+            ),
+        },
+        *messages,
+        {"role": "user", "content": "Write the memory update now."},
+    ]
+    chunks: list[str] = []
+    try:
+        async for token in providers.llm.stream_response(summary_prompt):
+            chunks.append(token)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Memory summary failed: {exc}") from exc
+    title = datetime.now().strftime("%Y-%m-%d %H:%M")
+    try:
+        text = MEMORY_STORE.append_summary("".join(chunks), title)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"text": text, "metadata": MEMORY_STORE.metadata()}
 
 
 @app.post("/api/settings/character")
@@ -319,13 +402,24 @@ async def websocket_events(websocket: WebSocket) -> None:
         expected_frame_ms=int(audio_config.get("frame_ms", 30)),
     )
     vad_config = BASE_CONFIG.section("vad")
+    asr_config = BASE_CONFIG.section("asr")
     min_speech_duration_ms = int(vad_config.get("min_speech_duration_ms", 0))
+    reject_low_energy_rms = float(asr_config.get("reject_low_energy_rms", 0))
+    reject_low_energy_max_duration_ms = int(
+        asr_config.get("reject_low_energy_max_duration_ms", 0)
+    )
+    reject_utterance_rms = float(asr_config.get("reject_utterance_rms", 0))
+    trim_silence_rms = float(asr_config.get("trim_silence_rms", 0))
+    trim_silence_frame_ms = int(
+        asr_config.get("trim_silence_frame_ms", audio_stats.expected_frame_ms)
+    )
     pre_speech_frames = int(audio_config.get("pre_speech_ms", 450)) // audio_stats.expected_frame_ms
     max_utterance_frames = int(audio_config.get("max_utterance_ms", 30000)) // audio_stats.expected_frame_ms
     bytes_per_ms = audio_stats.expected_sample_rate * 2 // 1000
     pre_buffer: deque[bytes] = deque(maxlen=max(1, pre_speech_frames))
     utterance_buffer = bytearray()
     recording_utterance = False
+    recording_mode = "chat"
     turn_config = TTS_MANAGER.current_turn_config()
     orchestrator = ConversationOrchestrator(
         providers=providers,
@@ -333,6 +427,7 @@ async def websocket_events(websocket: WebSocket) -> None:
         tts_chunk_chars=int(turn_config.get("tts_chunk_chars", 120)),
         min_tts_chars=int(turn_config.get("min_tts_chars", 0)),
         runtime_settings=RUNTIME_SETTINGS,
+        memory_store=MEMORY_STORE,
     )
 
     async def cancel_hook(reason: str) -> None:
@@ -340,6 +435,9 @@ async def websocket_events(websocket: WebSocket) -> None:
 
     async def seed_hook() -> None:
         await orchestrator.seed_character_first_message()
+
+    def companion_history_hook() -> list[dict[str, str]]:
+        return orchestrator.messages_for_mode("companion")
 
     def turn_config_hook(config: dict[str, Any]) -> None:
         orchestrator.update_turn_config(
@@ -351,6 +449,7 @@ async def websocket_events(websocket: WebSocket) -> None:
     TTS_CANCEL_HOOKS.add(cancel_hook)
     TURN_CONFIG_HOOKS.add(turn_config_hook)
     CHARACTER_SEED_HOOKS.add(seed_hook)
+    COMPANION_HISTORY_HOOKS.add(companion_history_hook)
     await orchestrator.seed_character_first_message()
 
     async def sender() -> None:
@@ -371,7 +470,7 @@ async def websocket_events(websocket: WebSocket) -> None:
             await websocket.send_json(event)
 
     async def receiver() -> None:
-        nonlocal recording_utterance
+        nonlocal recording_utterance, recording_mode
         active_turn: asyncio.Task | None = None
         # Await cancellation before replacing turns so stale streams cannot race the next turn.
         async def cancel_active_turn(reason: str) -> None:
@@ -386,30 +485,37 @@ async def websocket_events(websocket: WebSocket) -> None:
             message = await websocket.receive_json()
             message_type = message.get("type")
             payload = message.get("payload", {})
+            mode = str(payload.get("mode", "chat"))
+            if mode not in ("chat", "companion"):
+                mode = "chat"
             if message_type == "user.text":
                 text = str(payload.get("text", "")).strip()
-                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")))
+                RUNTIME_SETTINGS.active_mode = mode
+                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")), mode=mode)
                 if not text:
                     continue
                 orchestrator.providers.tts = TTS_MANAGER.get_provider()
                 await cancel_active_turn("new_user_text")
-                active_turn = asyncio.create_task(orchestrator.handle_text_turn(text))
+                active_turn = asyncio.create_task(orchestrator.handle_text_turn(text, mode=mode))
             elif message_type == "user.continue":
+                RUNTIME_SETTINGS.active_mode = mode
                 orchestrator.providers.tts = TTS_MANAGER.get_provider()
                 await cancel_active_turn("continue")
-                active_turn = asyncio.create_task(orchestrator.handle_continue())
+                active_turn = asyncio.create_task(orchestrator.handle_continue(mode=mode))
             elif message_type == "system_prompt.update":
-                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")))
-                await sink.emit("system_prompt.updated", enabled=bool(orchestrator.state.system_prompt))
+                RUNTIME_SETTINGS.active_mode = mode
+                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")), mode=mode)
+                await sink.emit("system_prompt.updated", mode=mode, enabled=bool(orchestrator.state.system_prompt))
             elif message_type == "conversation.clear":
                 await cancel_active_turn("conversation_clear")
-                await orchestrator.clear_conversation()
+                await orchestrator.clear_conversation(mode=mode)
             elif message_type == "tts.cancel":
                 await orchestrator.cancel_tts("manual")
             elif message_type == "vad.speech_start":
-                orchestrator.set_system_prompt(str(payload.get("system_prompt", orchestrator.state.system_prompt)))
+                RUNTIME_SETTINGS.active_mode = mode
+                orchestrator.set_system_prompt(str(payload.get("system_prompt", orchestrator.state.system_prompt)), mode=mode)
                 await orchestrator.cancel_tts("barge_in")
-                await sink.emit("vad.speech_start", source="browser")
+                await sink.emit("vad.speech_start", mode=mode, source="browser")
             elif message_type == "audio.frame":
                 try:
                     frame = parse_audio_frame(payload, audio_stats)
@@ -432,6 +538,13 @@ async def websocket_events(websocket: WebSocket) -> None:
                     continue
                 for vad_event in vad_events:
                     if vad_event.type == "vad.speech_start":
+                        recording_mode = mode
+                        RUNTIME_SETTINGS.active_mode = recording_mode
+                        if "system_prompt" in payload:
+                            orchestrator.set_system_prompt(
+                                str(payload.get("system_prompt", "")),
+                                mode=recording_mode,
+                            )
                         await orchestrator.cancel_tts("vad_barge_in")
                         utterance_buffer.clear()
                         for buffered_frame in pre_buffer:
@@ -439,6 +552,7 @@ async def websocket_events(websocket: WebSocket) -> None:
                         recording_utterance = True
                         await sink.emit(
                             "vad.speech_start",
+                            mode=recording_mode,
                             source="silero",
                             probability=vad_event.probability,
                             audio_ms=vad_event.audio_ms,
@@ -449,6 +563,7 @@ async def websocket_events(websocket: WebSocket) -> None:
                         utterance_buffer.clear()
                         await sink.emit(
                             "vad.speech_end",
+                            mode=recording_mode,
                             source="silero",
                             probability=vad_event.probability,
                             audio_ms=vad_event.audio_ms,
@@ -458,18 +573,75 @@ async def websocket_events(websocket: WebSocket) -> None:
                             if duration_ms < min_speech_duration_ms:
                                 await sink.emit(
                                     "vad.speech_rejected",
+                                    mode=recording_mode,
                                     duration_ms=duration_ms,
                                     min_duration_ms=min_speech_duration_ms,
                                 )
                                 pcm = b""
+                        if (
+                            pcm
+                            and reject_low_energy_rms > 0
+                            and reject_low_energy_max_duration_ms > 0
+                        ):
+                            duration_ms = len(pcm) // max(bytes_per_ms, 1)
+                            level = compute_pcm16_level(pcm)
+                            if (
+                                duration_ms <= reject_low_energy_max_duration_ms
+                                and level["rms"] < reject_low_energy_rms
+                            ):
+                                await sink.emit(
+                                    "vad.speech_rejected",
+                                    mode=recording_mode,
+                                    duration_ms=duration_ms,
+                                    rms=level["rms"],
+                                    min_rms=reject_low_energy_rms,
+                                    reason="low_energy",
+                                )
+                                pcm = b""
+                        if pcm and reject_utterance_rms > 0:
+                            duration_ms = len(pcm) // max(bytes_per_ms, 1)
+                            level = compute_pcm16_level(pcm)
+                            if level["rms"] < reject_utterance_rms:
+                                await sink.emit(
+                                    "vad.speech_rejected",
+                                    mode=recording_mode,
+                                    duration_ms=duration_ms,
+                                    rms=level["rms"],
+                                    min_rms=reject_utterance_rms,
+                                    reason="utterance_low_energy",
+                                )
+                                pcm = b""
+                        if pcm and trim_silence_rms > 0:
+                            original_duration_ms = len(pcm) // max(bytes_per_ms, 1)
+                            pcm = trim_pcm16_silence(
+                                pcm,
+                                frame_ms=trim_silence_frame_ms,
+                                sample_rate=audio_stats.expected_sample_rate,
+                                rms_threshold=trim_silence_rms,
+                            )
+                            trimmed_duration_ms = len(pcm) // max(bytes_per_ms, 1)
+                            if trimmed_duration_ms != original_duration_ms:
+                                await sink.emit(
+                                    "asr.audio_trimmed",
+                                    mode=recording_mode,
+                                    original_duration_ms=original_duration_ms,
+                                    trimmed_duration_ms=trimmed_duration_ms,
+                                    rms_threshold=trim_silence_rms,
+                                )
                         if pcm and (not active_turn or active_turn.done()):
+                            RUNTIME_SETTINGS.active_mode = recording_mode
                             orchestrator.providers.tts = TTS_MANAGER.get_provider()
                             active_turn = asyncio.create_task(
-                                orchestrator.handle_audio_turn(pcm, audio_stats.expected_sample_rate)
+                                orchestrator.handle_audio_turn(
+                                    pcm,
+                                    audio_stats.expected_sample_rate,
+                                    mode=recording_mode,
+                                )
                             )
                     elif vad_event.type == "vad.probability":
                         await sink.emit(
                             "vad.probability",
+                            mode=mode,
                             probability=vad_event.probability,
                             audio_ms=vad_event.audio_ms,
                         )
@@ -495,3 +667,4 @@ async def websocket_events(websocket: WebSocket) -> None:
         TTS_CANCEL_HOOKS.discard(cancel_hook)
         TURN_CONFIG_HOOKS.discard(turn_config_hook)
         CHARACTER_SEED_HOOKS.discard(seed_hook)
+        COMPANION_HISTORY_HOOKS.discard(companion_history_hook)

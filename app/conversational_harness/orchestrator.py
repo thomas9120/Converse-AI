@@ -13,7 +13,7 @@ from conversational_harness.providers.factory import ProviderBundle
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from conversational_harness.runtime_settings import RuntimeSettings
+    from conversational_harness.runtime_settings import MemoryStore, RuntimeSettings
 
 
 @dataclass
@@ -33,24 +33,31 @@ class ConversationOrchestrator:
         tts_chunk_chars: int = 120,
         min_tts_chars: int = 0,
         runtime_settings: RuntimeSettings | None = None,
+        memory_store: MemoryStore | None = None,
     ):
         self.providers = providers
         self.sink = sink
         self.tts_chunk_chars = tts_chunk_chars
         self.min_tts_chars = min_tts_chars
-        self.state = TurnState()
+        self._states = {"chat": TurnState(), "companion": TurnState()}
+        self.state = self._states["chat"]
         self._runtime_settings = runtime_settings
+        self._memory_store = memory_store
 
     def update_turn_config(self, *, tts_chunk_chars: int, min_tts_chars: int) -> None:
         self.tts_chunk_chars = tts_chunk_chars
         self.min_tts_chars = min_tts_chars
 
-    async def clear_conversation(self) -> None:
+    async def clear_conversation(self, mode: str = "chat") -> None:
+        self._select_mode(mode)
         await self.cancel_tts("conversation_clear")
         self.state.messages.clear()
-        await self.sink.emit("conversation.cleared")
+        await self.sink.emit("conversation.cleared", mode=self._mode)
 
-    async def seed_character_first_message(self) -> bool:
+    async def seed_character_first_message(self, mode: str = "chat") -> bool:
+        self._select_mode(mode)
+        if self._mode != "chat":
+            return False
         if self._runtime_settings is None or self._runtime_settings.character is None:
             return False
         # First messages start empty chats, but should never overwrite an active conversation.
@@ -63,10 +70,11 @@ class ConversationOrchestrator:
         if not text:
             return False
         self.state.messages.append({"role": "assistant", "content": text})
-        await self.sink.emit("conversation.seeded", role="assistant", text=text)
+        await self.sink.emit("conversation.seeded", mode=self._mode, role="assistant", text=text)
         return True
 
-    def set_system_prompt(self, prompt: str) -> None:
+    def set_system_prompt(self, prompt: str, mode: str = "chat") -> None:
+        self._select_mode(mode)
         self.state.system_prompt = prompt.strip()
 
     async def cancel_tts(self, reason: str) -> None:
@@ -79,17 +87,21 @@ class ConversationOrchestrator:
         if active:
             await self.sink.emit("tts.cancelled", reason=reason)
 
-    async def handle_text_turn(self, text: str) -> None:
+    async def handle_text_turn(self, text: str, mode: str = "chat") -> None:
+        self._select_mode(mode)
+        turn_state = self.state
+        turn_mode = self._mode
         started = time.perf_counter()
-        turn_id = self._next_turn_id()
+        turn_id = self._next_turn_id(turn_state)
         await self.cancel_tts("new_user_turn")
-        await self.sink.emit("turn.started", turn_id=turn_id)
-        await self.sink.emit("vad.speech_start", source="text")
+        await self.sink.emit("turn.started", mode=turn_mode, turn_id=turn_id)
+        await self.sink.emit("vad.speech_start", mode=turn_mode, source="text")
 
         final_transcript = ""
         async for transcript in self.providers.asr.transcribe_text_input(text):
             await self.sink.emit(
                 "asr.transcript",
+                mode=turn_mode,
                 text=transcript.text,
                 final=transcript.final,
                 latency_ms=elapsed_ms(started),
@@ -98,21 +110,26 @@ class ConversationOrchestrator:
                 final_transcript = transcript.text
 
         await self.sink.emit(
-            "vad.speech_end", source="text", latency_ms=elapsed_ms(started)
+            "vad.speech_end", mode=turn_mode, source="text", latency_ms=elapsed_ms(started)
         )
         if not final_transcript:
-            await self.sink.emit("turn.finished", reason="empty_transcript")
+            await self.sink.emit("turn.finished", mode=turn_mode, reason="empty_transcript")
             return
 
-        await self._respond_to_transcript(final_transcript, started, turn_id)
+        await self._respond_to_transcript(
+            final_transcript, started, turn_id, turn_state, turn_mode
+        )
 
-    async def handle_audio_turn(self, pcm_s16le: bytes, sample_rate: int) -> None:
+    async def handle_audio_turn(self, pcm_s16le: bytes, sample_rate: int, mode: str = "chat") -> None:
+        self._select_mode(mode)
+        turn_state = self.state
+        turn_mode = self._mode
         started = time.perf_counter()
-        turn_id = self._next_turn_id()
+        turn_id = self._next_turn_id(turn_state)
         await self.cancel_tts("new_audio_turn")
-        await self.sink.emit("turn.started", source="audio", turn_id=turn_id)
+        await self.sink.emit("turn.started", mode=turn_mode, source="audio", turn_id=turn_id)
         await self.sink.emit(
-            "asr.started", sample_rate=sample_rate, bytes=len(pcm_s16le)
+                "asr.started", mode=turn_mode, sample_rate=sample_rate, bytes=len(pcm_s16le)
         )
 
         final_transcript = ""
@@ -128,6 +145,7 @@ class ConversationOrchestrator:
             ):
                 await self.sink.emit(
                     "asr.transcript",
+                    mode=turn_mode,
                     text=transcript.text,
                     final=transcript.final,
                     latency_ms=elapsed_ms(started),
@@ -139,94 +157,125 @@ class ConversationOrchestrator:
                 "asr.error", message=str(exc), latency_ms=elapsed_ms(started)
             )
             await self.sink.emit(
-                "turn.finished", reason="asr_error", latency_ms=elapsed_ms(started)
+                "turn.finished", mode=turn_mode, reason="asr_error", latency_ms=elapsed_ms(started)
             )
             return
 
         if not final_transcript:
             await self.sink.emit(
                 "turn.finished",
+                mode=turn_mode,
                 reason="empty_transcript",
                 latency_ms=elapsed_ms(started),
             )
             return
 
-        await self._respond_to_transcript(final_transcript, started, turn_id)
+        await self._respond_to_transcript(
+            final_transcript, started, turn_id, turn_state, turn_mode
+        )
 
-    async def handle_continue(self) -> None:
-        if not self.state.messages or self.state.messages[-1]["role"] != "assistant":
+    async def handle_continue(self, mode: str = "chat") -> None:
+        self._select_mode(mode)
+        turn_state = self.state
+        turn_mode = self._mode
+        if not turn_state.messages or turn_state.messages[-1]["role"] != "assistant":
             await self.sink.emit(
-                "turn.error", message="No previous assistant message to continue."
+                "turn.error", mode=turn_mode, message="No previous assistant message to continue."
             )
             return
         started = time.perf_counter()
-        turn_id = self._next_turn_id()
+        turn_id = self._next_turn_id(turn_state)
         await self.cancel_tts("continue_turn")
-        await self.sink.emit("turn.started", source="continue", turn_id=turn_id)
-        prefix = self.state.messages[-1]["content"]
-        self.state.messages.pop()
-        self.state.messages.append({"role": "assistant", "content": prefix})
+        await self.sink.emit("turn.started", mode=turn_mode, source="continue", turn_id=turn_id)
+        prefix = turn_state.messages[-1]["content"]
+        turn_state.messages.pop()
+        turn_state.messages.append({"role": "assistant", "content": prefix})
 
         try:
-            response_text = await self._stream_llm_and_tts(prefix, started, turn_id)
-            self.state.messages[-1] = {
+            response_text = await self._stream_llm_and_tts(
+                prefix, started, turn_id, turn_state, turn_mode
+            )
+            turn_state.messages[-1] = {
                 "role": "assistant",
                 "content": response_text.strip(),
             }
-            await self.sink.emit("turn.finished", latency_ms=elapsed_ms(started))
+            await self.sink.emit("turn.finished", mode=turn_mode, latency_ms=elapsed_ms(started))
         except Exception as exc:
             await self.sink.emit(
-                "turn.error", message=str(exc), latency_ms=elapsed_ms(started)
+                "turn.error", mode=turn_mode, message=str(exc), latency_ms=elapsed_ms(started)
             )
 
     async def _respond_to_transcript(
-        self, final_transcript: str, started: float, turn_id: int
+        self,
+        final_transcript: str,
+        started: float,
+        turn_id: int,
+        turn_state: TurnState,
+        turn_mode: str,
     ) -> None:
-        self.state.messages.append({"role": "user", "content": final_transcript})
+        turn_state.messages.append({"role": "user", "content": final_transcript})
         try:
-            response_text = await self._stream_llm_and_tts("", started, turn_id)
-            self.state.messages.append(
+            response_text = await self._stream_llm_and_tts(
+                "", started, turn_id, turn_state, turn_mode
+            )
+            turn_state.messages.append(
                 {"role": "assistant", "content": response_text.strip()}
             )
-            await self.sink.emit("turn.finished", latency_ms=elapsed_ms(started))
+            await self.sink.emit("turn.finished", mode=turn_mode, latency_ms=elapsed_ms(started))
         except Exception as exc:
             await self.sink.emit(
-                "turn.error", message=str(exc), latency_ms=elapsed_ms(started)
+                "turn.error", mode=turn_mode, message=str(exc), latency_ms=elapsed_ms(started)
             )
 
     async def _stream_llm_and_tts(
-        self, response_text: str, started: float, turn_id: int
+        self,
+        response_text: str,
+        started: float,
+        turn_id: int,
+        turn_state: TurnState,
+        turn_mode: str,
     ) -> str:
         first_token_seen = False
         sentence_buffer = ""
-        async for token in self.providers.llm.stream_response(self._llm_messages()):
+        async for token in self.providers.llm.stream_response(
+            self._llm_messages(turn_state, turn_mode)
+        ):
             if not first_token_seen:
                 first_token_seen = True
-                await self.sink.emit("llm.first_token", latency_ms=elapsed_ms(started))
+                await self.sink.emit("llm.first_token", mode=turn_mode, latency_ms=elapsed_ms(started))
             response_text += token
             sentence_buffer += token
-            await self.sink.emit("llm.token", text=token, accumulated=response_text)
+            await self.sink.emit("llm.token", mode=turn_mode, text=token, accumulated=response_text)
 
             if should_flush_tts(
                 sentence_buffer, self.tts_chunk_chars, self.min_tts_chars
             ):
-                await self._start_tts_chunk(sentence_buffer.strip(), started, turn_id)
+                await self._start_tts_chunk(
+                    sentence_buffer.strip(), started, turn_id, turn_state, turn_mode
+                )
                 sentence_buffer = ""
 
         if sentence_buffer.strip():
-            await self._start_tts_chunk(sentence_buffer.strip(), started, turn_id)
+            await self._start_tts_chunk(
+                sentence_buffer.strip(), started, turn_id, turn_state, turn_mode
+            )
         return response_text
 
     async def _start_tts_chunk(
-        self, text: str, turn_started: float, turn_id: int
+        self,
+        text: str,
+        turn_started: float,
+        turn_id: int,
+        turn_state: TurnState,
+        turn_mode: str,
     ) -> None:
-        previous = self.state.tts_tail
+        previous = turn_state.tts_tail
         task = asyncio.create_task(
-            self._stream_tts_after(previous, text, turn_started, turn_id)
+            self._stream_tts_after(previous, text, turn_started, turn_id, turn_mode)
         )
-        self.state.tts_tail = task
-        self.state.active_tts_tasks.add(task)
-        task.add_done_callback(self.state.active_tts_tasks.discard)
+        turn_state.tts_tail = task
+        turn_state.active_tts_tasks.add(task)
+        task.add_done_callback(turn_state.active_tts_tasks.discard)
 
     async def _stream_tts_after(
         self,
@@ -234,15 +283,18 @@ class ConversationOrchestrator:
         text: str,
         turn_started: float,
         turn_id: int,
+        turn_mode: str,
     ) -> None:
         if previous is not None:
             try:
                 await previous
             except Exception as exc:
                 logger.warning("Previous TTS task failed: %s", exc)
-        await self._stream_tts(text, turn_started, turn_id)
+        await self._stream_tts(text, turn_started, turn_id, turn_mode)
 
-    async def _stream_tts(self, text: str, turn_started: float, turn_id: int) -> None:
+    async def _stream_tts(
+        self, text: str, turn_started: float, turn_id: int, turn_mode: str
+    ) -> None:
         first_chunk_seen = False
         chunk_index = 0
         try:
@@ -260,6 +312,7 @@ class ConversationOrchestrator:
                     first_chunk_seen = True
                     await self.sink.emit(
                         "tts.first_chunk",
+                        mode=turn_mode,
                         latency_ms=elapsed_ms(turn_started),
                         text=text,
                         turn_id=turn_id,
@@ -267,6 +320,7 @@ class ConversationOrchestrator:
                 encoded = base64.b64encode(chunk.data).decode("ascii")
                 await self.sink.emit(
                     "tts.audio",
+                    mode=turn_mode,
                     mime_type=chunk.mime_type,
                     sample_rate=chunk.sample_rate,
                     channels=chunk.channels,
@@ -286,29 +340,54 @@ class ConversationOrchestrator:
         except Exception as exc:
             await self.sink.emit(
                 "tts.error",
+                mode=turn_mode,
                 message=str(exc),
                 latency_ms=elapsed_ms(turn_started),
                 text=text,
             )
 
-    def _llm_messages(self) -> list[dict[str, str]]:
-        prompt = self._effective_system_prompt()
+    def _llm_messages(self, turn_state: TurnState, turn_mode: str) -> list[dict[str, str]]:
+        prompt = self._effective_system_prompt(turn_state, turn_mode)
         if not prompt:
-            return list(self.state.messages)
-        return [{"role": "system", "content": prompt}, *self.state.messages]
+            return list(turn_state.messages)
+        return [{"role": "system", "content": prompt}, *turn_state.messages]
 
-    def _effective_system_prompt(self) -> str:
+    def messages_for_mode(self, mode: str) -> list[dict[str, str]]:
+        selected = mode if mode in self._states else "chat"
+        return list(self._states[selected].messages)
+
+    def _effective_system_prompt(self, turn_state: TurnState, turn_mode: str) -> str:
         if self._runtime_settings is not None:
-            return self._runtime_settings.effective_system_prompt(
-                self.state.system_prompt
+            self._runtime_settings.active_mode = turn_mode
+            memory_text = (
+                self._memory_store.read()
+                if turn_mode == "companion" and self._memory_store
+                else ""
             )
-        if self.state.system_prompt:
-            return self.state.system_prompt
+            return self._runtime_settings.effective_system_prompt(
+                turn_state.system_prompt,
+                mode=turn_mode,
+                memory_text=memory_text,
+            )
+        if turn_state.system_prompt:
+            return turn_state.system_prompt
         return ""
 
-    def _next_turn_id(self) -> int:
-        self.state.turn_id += 1
-        return self.state.turn_id
+    def _next_turn_id(self, turn_state: TurnState | None = None) -> int:
+        selected = turn_state or self.state
+        selected.turn_id += 1
+        return selected.turn_id
+
+    @property
+    def _mode(self) -> str:
+        for mode, state in self._states.items():
+            if state is self.state:
+                return mode
+        return "chat"
+
+    def _select_mode(self, mode: str) -> None:
+        selected = mode if mode in self._states else "chat"
+        self.state = self._states[selected]
 
 
 def elapsed_ms(started: float) -> int:
