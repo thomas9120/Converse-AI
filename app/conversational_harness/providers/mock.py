@@ -59,6 +59,9 @@ class MockASRProvider(ASRProvider):
     async def check_status(self) -> ProviderStatus:
         return self.status
 
+    async def load(self) -> ProviderStatus:
+        return self.status
+
     async def transcribe_text_input(self, text: str) -> AsyncIterator[TranscriptEvent]:
         words = text.strip().split()
         if not words:

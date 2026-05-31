@@ -8,7 +8,8 @@ The implementation provides a runnable scaffold with clear provider boundaries:
 - **ASR**: faster-whisper with CUDA or CPU support, mock fallback included.
 - **LLM**: llama.cpp OpenAI-compatible adapter with runtime-adjustable sampler settings.
 - **TTS**: Pocket TTS and Kokoro ONNX voice output, mock tone fallback included.
-- **UI**: local browser app with Chat and Settings tabs, text/voice turns, event stream, and latency metrics.
+- **UI**: local browser app with Chat, Companion, and Settings tabs, text/voice turns, event stream, and latency metrics.
+- **Companion mode**: separate prompt, names, sampler overrides, transcript, and optional Markdown memory backed by `memory.md`.
 
 The default start profile is `profiles/llamacpp-cuda-asr.json`, which uses Silero VAD, CUDA faster-whisper ASR, llama.cpp, and Pocket TTS. A CPU ASR fallback is available at `profiles/llamacpp-local.json`. A no-model smoke-test profile is at `profiles/mock-local.json`.
 
@@ -77,9 +78,11 @@ $env:HARNESS_PROFILE="profiles/llamacpp-local.json"
 .\start.ps1
 ```
 
-The model is loaded on first spoken utterance. If it is not already cached, faster-whisper/Hugging Face may download it at that point. After Silero emits `vad.speech_end`, the harness transcribes the buffered utterance and feeds the transcript into the same llama.cpp turn pipeline used by typed messages.
+The model starts loading when you click Connect, so the first spoken utterance does not pay the model-load cost. If it is not already cached, faster-whisper/Hugging Face may download it at that point. After Silero emits `vad.speech_end`, the harness trims quiet leading/trailing audio, applies low-energy rejection guards, transcribes the buffered utterance, and feeds the transcript into the active mode's llama.cpp turn pipeline.
 
-During ASR the UI reports progress stages such as queued, loading, loaded, segment, and complete. If first use appears slow, check `server.err.log` for Hugging Face download/cache warnings.
+During ASR the UI reports progress stages such as queued, loading, loaded, segment, trim, and complete. If first use appears slow, check `server.err.log` for Hugging Face download/cache warnings.
+
+The included faster-whisper profiles also use conservative anti-hallucination settings for `large-v3-turbo`, including `condition_on_previous_text: false`, `temperature: 0`, `no_speech_threshold: 0.2`, tighter Silero VAD thresholds, short/quiet utterance rejection, and silence trimming before ASR.
 
 ## Voice TTS
 
@@ -124,7 +127,33 @@ Kokoro is tuned separately from Pocket TTS because its CPU ONNX path benefits fr
 
 ## Settings Tab
 
-The UI has a Settings tab (next to Chat in the topbar) with three sections:
+The UI has Chat, Companion, and Settings tabs in the topbar. Chat is the standard harness conversation, Companion is a separate persistent companion workspace, and Settings controls the standard chat defaults and character-card workflow.
+
+## Companion Tab
+
+Companion mode is separate from standard Chat mode:
+
+- It has its own transcript, composer, user name, AI name, system prompt, and sampler overrides.
+- Text and voice turns are routed to the active tab, so Companion speech and Chat speech keep separate histories.
+- Character-card first-message seeding applies only to standard Chat mode.
+- Companion prompt assembly uses the Companion names, Companion system prompt, optional memory, and Companion sampler overrides.
+
+### Companion Memory
+
+Companion memory is stored in project-root `memory.md`, which is ignored by git. The file is created on first memory write, not on startup.
+
+Memory is manual-save in this version:
+
+- **Save Memory** writes the current memory editor text to `memory.md`.
+- **Summarize Chat** sends the visible Companion transcript to the active LLM and appends a dated Markdown summary to `memory.md`.
+- **Clear Memory** removes the saved memory file.
+- The Memory checkbox controls whether saved memory is injected into Companion LLM requests.
+
+Saved memory is injected only in Companion mode when memory is enabled. It is not injected into standard Chat or character-card conversations.
+
+## Settings Tab
+
+The Settings tab has three sections:
 
 ### Names
 
@@ -170,6 +199,10 @@ The Chat tab has a "Continue" button next to Send. When the LLM response is cut 
 | `/api/settings/character` | POST | Import character card (JSON body) |
 | `/api/settings/character/upload` | POST | Upload character card file (PNG or JSON) |
 | `/api/settings/character` | DELETE | Clear active character card |
+| `/api/companion/memory` | GET | Read Companion memory text and metadata |
+| `/api/companion/memory` | PUT | Save edited Companion memory text |
+| `/api/companion/memory/summarize` | POST | Summarize Companion transcript into `memory.md` |
+| `/api/companion/memory` | DELETE | Clear Companion memory |
 | `/api/tts/select` | POST | Select TTS preset |
 | `/api/tts/load` | POST | Load TTS model |
 | `/api/tts/unload` | POST | Unload TTS model |
@@ -238,6 +271,7 @@ Notes:
 - The harness uses `/v1/chat/completions` with streaming enabled.
 - `doctor` checks `/health` and `/v1/models` so missing or still-loading models are visible.
 - On startup, the harness fetches `/props` from llama.cpp to learn the server's current sampler defaults and pre-fills the Settings UI.
+- Sampler resolution is server defaults, then profile defaults, then the active mode's runtime overrides. Companion mode has its own override set.
 - Vulkan can be useful for llama.cpp on non-CUDA systems, but it is LLM-only here and should be treated as experimental for this voice stack.
 - The default profile uses `"model": "auto"` and selects the first model reported by `/v1/models`.
 - If you prefer a fixed ID, set `llm.model` to the exact model ID reported by `/v1/models`, or launch `llama-server` with a matching `--alias`.

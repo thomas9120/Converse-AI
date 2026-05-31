@@ -309,6 +309,10 @@ async def merged_profile_raw() -> dict[str, Any]:
 
 async def provider_statuses_payload() -> list[dict[str, Any]]:
     providers = build_provider_bundle(BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider())
+    return await provider_statuses_for_bundle(providers)
+
+
+async def provider_statuses_for_bundle(providers) -> list[dict[str, Any]]:
     tts_runtime = await TTS_MANAGER.describe()
     items = [
         await providers.vad.check_status(),
@@ -452,6 +456,34 @@ async def websocket_events(websocket: WebSocket) -> None:
     COMPANION_HISTORY_HOOKS.add(companion_history_hook)
     await orchestrator.seed_character_first_message()
 
+    async def warm_asr_on_connect() -> None:
+        if not hasattr(providers.asr, "load"):
+            return
+        await sink.emit(
+            "asr.progress",
+            stage="loading",
+            message="Loading ASR model for voice input.",
+        )
+        try:
+            status = await providers.asr.load()
+        except Exception as exc:
+            await sink.emit(
+                "asr.error",
+                message=f"ASR preload failed: {exc}",
+            )
+            return
+        await sink.emit(
+            "asr.progress",
+            stage="loaded",
+            message=status.message,
+        )
+        await sink.emit(
+            "providers.status",
+            providers=await provider_statuses_for_bundle(providers),
+            summary=profile_summary(await merged_profile_raw()),
+            tts_runtime=await TTS_MANAGER.describe(),
+        )
+
     async def sender() -> None:
         raw = await merged_profile_raw()
         await websocket.send_json({"type": "profile.loaded", "payload": {"name": BASE_CONFIG.name}})
@@ -465,6 +497,7 @@ async def websocket_events(websocket: WebSocket) -> None:
                 },
             }
         )
+        asyncio.create_task(warm_asr_on_connect())
         while True:
             event = await queue.get()
             await websocket.send_json(event)

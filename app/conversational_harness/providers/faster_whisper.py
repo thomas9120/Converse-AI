@@ -61,6 +61,12 @@ class FasterWhisperASRProvider(ASRProvider):
             self._load_error = str(exc)
         return self.status
 
+    async def load(self) -> ProviderStatus:
+        if self._model is not None:
+            return self.status
+        await asyncio.wait_for(asyncio.to_thread(self._ensure_model), timeout=self.timeout_s)
+        return self.status
+
     async def transcribe_text_input(self, text: str) -> AsyncIterator[TranscriptEvent]:
         stripped = text.strip()
         if stripped:

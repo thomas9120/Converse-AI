@@ -78,6 +78,9 @@ class ASRProvider(Protocol):
     async def check_status(self) -> ProviderStatus:
         ...
 
+    async def load(self) -> ProviderStatus:
+        ...
+
     async def transcribe_text_input(self, text: str) -> AsyncIterator[TranscriptEvent]:
         ...
 
