@@ -1076,12 +1076,27 @@ async function saveMemory() {
 async function summarizeMemory() {
   memoryStatusEl.textContent = "Summarizing companion chat...";
   try {
-    const payload = await postJson("/api/companion/memory/summarize", {});
+    const payload = await postJson("/api/companion/memory/summarize", {
+      messages: transcriptMessages(companionConversationEl),
+    });
     companionMemoryInput.value = payload.text || "";
     memoryStatusEl.textContent = `Memory summarized - ${payload.metadata.chars} chars`;
   } catch (error) {
     memoryStatusEl.textContent = `Memory summarize failed: ${error.message}`;
   }
+}
+
+function transcriptMessages(container) {
+  return Array.from(container.querySelectorAll(".message"))
+    .map((node) => {
+      const role = node.classList.contains("assistant")
+        ? "assistant"
+        : node.classList.contains("user")
+          ? "user"
+          : "system";
+      return { role, content: node.textContent.trim() };
+    })
+    .filter((message) => message.content && message.role !== "system");
 }
 
 async function clearMemory() {

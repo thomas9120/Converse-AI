@@ -148,3 +148,37 @@ def test_memory_summarize_uses_companion_history(client, monkeypatch):
 
     assert response.status_code == 200
     assert "User likes concise memory" in response.json()["text"]
+
+
+def test_memory_summarize_accepts_posted_companion_transcript(client, monkeypatch):
+    class SummaryLLM:
+        def set_runtime_settings(self, settings):
+            self.settings = settings
+
+        async def stream_response(self, messages):
+            assert {"role": "user", "content": "Visible companion text."} in messages
+            yield "- Visible companion text should be remembered."
+
+    monkeypatch.setattr(
+        main,
+        "build_provider_bundle",
+        lambda *args, **kwargs: ProviderBundle(
+            MockVADProvider({}),
+            MockASRProvider({}),
+            SummaryLLM(),
+            MockTTSProvider({}),
+        ),
+    )
+
+    response = client.post(
+        "/api/companion/memory/summarize",
+        json={
+            "messages": [
+                {"role": "system", "content": "Memory summarized"},
+                {"role": "user", "content": "Visible companion text."},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Visible companion text should be remembered" in response.json()["text"]

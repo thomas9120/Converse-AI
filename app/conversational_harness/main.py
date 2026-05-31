@@ -166,13 +166,27 @@ async def delete_companion_memory() -> dict[str, Any]:
     return MEMORY_STORE.payload()
 
 
-@app.post("/api/companion/memory/summarize")
-async def summarize_companion_memory() -> dict[str, Any]:
+def _valid_summary_messages(raw_messages: Any) -> list[dict[str, str]]:
+    if not isinstance(raw_messages, list):
+        return []
     messages: list[dict[str, str]] = []
+    for item in raw_messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip()
+        content = str(item.get("content", "")).strip()
+        if role in {"user", "assistant"} and content:
+            messages.append({"role": role, "content": content})
+    return messages
+
+
+@app.post("/api/companion/memory/summarize")
+async def summarize_companion_memory(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    messages = _valid_summary_messages((payload or {}).get("messages"))
     for hook in list(COMPANION_HISTORY_HOOKS):
-        messages = hook()
         if messages:
             break
+        messages = _valid_summary_messages(hook())
     if not messages:
         raise HTTPException(status_code=400, detail="No companion conversation to summarize")
 
