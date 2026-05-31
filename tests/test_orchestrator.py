@@ -22,6 +22,13 @@ class RecordingLLM:
         yield "ok."
 
 
+class SlowLLM:
+    async def stream_response(self, messages):
+        yield "still "
+        await asyncio.sleep(0)
+        yield "companion."
+
+
 def test_should_flush_tts_on_sentence_or_limit():
     assert should_flush_tts("Hello there.", 120)
     assert should_flush_tts("x" * 121, 120)
@@ -35,7 +42,9 @@ def test_text_turn_emits_core_events():
         config = load_config("profiles/mock-local.json")
         providers = build_providers(config)
         queue = asyncio.Queue()
-        orchestrator = ConversationOrchestrator(providers, QueueEventSink(queue), tts_chunk_chars=60)
+        orchestrator = ConversationOrchestrator(
+            providers, QueueEventSink(queue), tts_chunk_chars=60
+        )
 
         await orchestrator.handle_text_turn("hello harness")
         await asyncio.sleep(0.15)
@@ -267,6 +276,37 @@ def test_companion_and_chat_histories_are_separate():
 
     assert chat_messages[0]["content"] == "chat hello"
     assert companion_messages[0]["content"] == "companion hello"
+
+
+def test_companion_turn_keeps_mode_if_chat_state_is_selected_mid_stream():
+    async def run_turn():
+        config = load_config("profiles/mock-local.json")
+        providers = build_providers(config)
+        providers.llm = SlowLLM()
+        queue = asyncio.Queue()
+        orchestrator = ConversationOrchestrator(providers, QueueEventSink(queue), tts_chunk_chars=60)
+
+        companion_turn = asyncio.create_task(
+            orchestrator.handle_text_turn("companion hello", mode="companion")
+        )
+        await asyncio.sleep(0)
+        orchestrator.set_system_prompt("chat prompt", mode="chat")
+        await companion_turn
+        await asyncio.sleep(0.15)
+
+        events = []
+        while not queue.empty():
+            events.append(await queue.get())
+        return [
+            event["payload"].get("mode")
+            for event in events
+            if event["type"] in {"asr.transcript", "llm.first_token", "llm.token", "turn.finished"}
+        ]
+
+    modes = asyncio.run(run_turn())
+
+    assert modes
+    assert set(modes) == {"companion"}
 
 
 def test_clear_conversation_removes_history():

@@ -390,6 +390,7 @@ async def websocket_events(websocket: WebSocket) -> None:
     pre_buffer: deque[bytes] = deque(maxlen=max(1, pre_speech_frames))
     utterance_buffer = bytearray()
     recording_utterance = False
+    recording_mode = "chat"
     turn_config = TTS_MANAGER.current_turn_config()
     orchestrator = ConversationOrchestrator(
         providers=providers,
@@ -440,7 +441,7 @@ async def websocket_events(websocket: WebSocket) -> None:
             await websocket.send_json(event)
 
     async def receiver() -> None:
-        nonlocal recording_utterance
+        nonlocal recording_utterance, recording_mode
         active_turn: asyncio.Task | None = None
         # Await cancellation before replacing turns so stale streams cannot race the next turn.
         async def cancel_active_turn(reason: str) -> None:
@@ -508,6 +509,13 @@ async def websocket_events(websocket: WebSocket) -> None:
                     continue
                 for vad_event in vad_events:
                     if vad_event.type == "vad.speech_start":
+                        recording_mode = mode
+                        RUNTIME_SETTINGS.active_mode = recording_mode
+                        if "system_prompt" in payload:
+                            orchestrator.set_system_prompt(
+                                str(payload.get("system_prompt", "")),
+                                mode=recording_mode,
+                            )
                         await orchestrator.cancel_tts("vad_barge_in")
                         utterance_buffer.clear()
                         for buffered_frame in pre_buffer:
@@ -515,6 +523,7 @@ async def websocket_events(websocket: WebSocket) -> None:
                         recording_utterance = True
                         await sink.emit(
                             "vad.speech_start",
+                            mode=recording_mode,
                             source="silero",
                             probability=vad_event.probability,
                             audio_ms=vad_event.audio_ms,
@@ -525,6 +534,7 @@ async def websocket_events(websocket: WebSocket) -> None:
                         utterance_buffer.clear()
                         await sink.emit(
                             "vad.speech_end",
+                            mode=recording_mode,
                             source="silero",
                             probability=vad_event.probability,
                             audio_ms=vad_event.audio_ms,
@@ -534,19 +544,25 @@ async def websocket_events(websocket: WebSocket) -> None:
                             if duration_ms < min_speech_duration_ms:
                                 await sink.emit(
                                     "vad.speech_rejected",
+                                    mode=recording_mode,
                                     duration_ms=duration_ms,
                                     min_duration_ms=min_speech_duration_ms,
                                 )
                                 pcm = b""
                         if pcm and (not active_turn or active_turn.done()):
-                            RUNTIME_SETTINGS.active_mode = "chat"
+                            RUNTIME_SETTINGS.active_mode = recording_mode
                             orchestrator.providers.tts = TTS_MANAGER.get_provider()
                             active_turn = asyncio.create_task(
-                                orchestrator.handle_audio_turn(pcm, audio_stats.expected_sample_rate, mode="chat")
+                                orchestrator.handle_audio_turn(
+                                    pcm,
+                                    audio_stats.expected_sample_rate,
+                                    mode=recording_mode,
+                                )
                             )
                     elif vad_event.type == "vad.probability":
                         await sink.emit(
                             "vad.probability",
+                            mode=mode,
                             probability=vad_event.probability,
                             audio_ms=vad_event.audio_ms,
                         )

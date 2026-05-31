@@ -595,6 +595,8 @@ function sendAudioFrame(samples, sampleRate, frameMs) {
   state.ws.send(JSON.stringify({
     type: "audio.frame",
     payload: {
+      mode: state.view === "companion" ? "companion" : "chat",
+      system_prompt: state.view === "companion" ? companionSystemPromptInput.value : systemPromptInput.value,
       encoding: "pcm_s16le",
       sample_rate: sampleRate,
       channels: 1,
