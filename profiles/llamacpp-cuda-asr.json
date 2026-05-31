@@ -10,10 +10,10 @@
   },
   "vad": {
     "provider": "silero",
-    "speech_threshold": 0.6,
-    "neg_threshold": 0.35,
+    "speech_threshold": 0.65,
+    "neg_threshold": 0.4,
     "hangover_ms": 450,
-    "min_speech_duration_ms": 200
+    "min_speech_duration_ms": 300
   },
   "asr": {
     "provider": "faster-whisper",
@@ -30,6 +30,9 @@
     "no_speech_threshold": 0.2,
     "reject_low_energy_rms": 0.003,
     "reject_low_energy_max_duration_ms": 900,
+    "reject_utterance_rms": 0.002,
+    "trim_silence_rms": 0.003,
+    "trim_silence_frame_ms": 30,
     "timeout_s": 180
   },
   "llm": {

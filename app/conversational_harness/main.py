@@ -16,7 +16,12 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from conversational_harness.audio_frames import AudioFrameStats, compute_pcm16_level, parse_audio_frame
+from conversational_harness.audio_frames import (
+    AudioFrameStats,
+    compute_pcm16_level,
+    parse_audio_frame,
+    trim_pcm16_silence,
+)
 from conversational_harness.config import PROJECT_ROOT, load_config
 from conversational_harness.orchestrator import ConversationOrchestrator, QueueEventSink
 from conversational_harness.providers.factory import build_provider_bundle, serialize_statuses
@@ -403,6 +408,11 @@ async def websocket_events(websocket: WebSocket) -> None:
     reject_low_energy_max_duration_ms = int(
         asr_config.get("reject_low_energy_max_duration_ms", 0)
     )
+    reject_utterance_rms = float(asr_config.get("reject_utterance_rms", 0))
+    trim_silence_rms = float(asr_config.get("trim_silence_rms", 0))
+    trim_silence_frame_ms = int(
+        asr_config.get("trim_silence_frame_ms", audio_stats.expected_frame_ms)
+    )
     pre_speech_frames = int(audio_config.get("pre_speech_ms", 450)) // audio_stats.expected_frame_ms
     max_utterance_frames = int(audio_config.get("max_utterance_ms", 30000)) // audio_stats.expected_frame_ms
     bytes_per_ms = audio_stats.expected_sample_rate * 2 // 1000
@@ -588,6 +598,36 @@ async def websocket_events(websocket: WebSocket) -> None:
                                     reason="low_energy",
                                 )
                                 pcm = b""
+                        if pcm and reject_utterance_rms > 0:
+                            duration_ms = len(pcm) // max(bytes_per_ms, 1)
+                            level = compute_pcm16_level(pcm)
+                            if level["rms"] < reject_utterance_rms:
+                                await sink.emit(
+                                    "vad.speech_rejected",
+                                    mode=recording_mode,
+                                    duration_ms=duration_ms,
+                                    rms=level["rms"],
+                                    min_rms=reject_utterance_rms,
+                                    reason="utterance_low_energy",
+                                )
+                                pcm = b""
+                        if pcm and trim_silence_rms > 0:
+                            original_duration_ms = len(pcm) // max(bytes_per_ms, 1)
+                            pcm = trim_pcm16_silence(
+                                pcm,
+                                frame_ms=trim_silence_frame_ms,
+                                sample_rate=audio_stats.expected_sample_rate,
+                                rms_threshold=trim_silence_rms,
+                            )
+                            trimmed_duration_ms = len(pcm) // max(bytes_per_ms, 1)
+                            if trimmed_duration_ms != original_duration_ms:
+                                await sink.emit(
+                                    "asr.audio_trimmed",
+                                    mode=recording_mode,
+                                    original_duration_ms=original_duration_ms,
+                                    trimmed_duration_ms=trimmed_duration_ms,
+                                    rms_threshold=trim_silence_rms,
+                                )
                         if pcm and (not active_turn or active_turn.done()):
                             RUNTIME_SETTINGS.active_mode = recording_mode
                             orchestrator.providers.tts = TTS_MANAGER.get_provider()
