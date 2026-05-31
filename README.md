@@ -31,6 +31,8 @@ Linux/macOS:
 
 Then open `http://127.0.0.1:7860`.
 
+`start.*` now runs a guided launcher. It checks the selected profile, required Python packages, the harness port, provider status, and llama.cpp readiness before starting uvicorn. In an interactive terminal it can prompt for the profile and ask before opening the browser. For non-interactive use, pass `--no-prompt --no-browser`.
+
 ## Prerequisites
 
 - **Python 3.11, 3.12, or 3.13** (Python 3.14 is not supported by `kokoro-onnx==0.5.0`; the project venv uses whatever Python created it)
@@ -212,7 +214,7 @@ The Chat tab has a "Continue" button next to Send. When the LLM response is cut 
 ## Scripts
 
 - `install.*`: verifies Python 3.11+, creates or reuses `.venv`, installs Python dependencies, and prints next steps.
-- `start.*`: launches the local web/backend server in the foreground. It honors `HARNESS_PROFILE` and `HARNESS_PORT`, refuses to start if the target port is already occupied, and prints the local URL. Windows also adds NVIDIA package bin directories from `.venv` to `PATH` for CUDA ASR.
+- `start.*`: launches the guided startup flow and then runs the local web/backend server in the foreground. It honors `HARNESS_PROFILE` and `HARNESS_PORT`, refuses to start if the target port is already occupied, checks provider/backend readiness, and prints the local URL. Windows also adds NVIDIA package bin directories from `.venv` to `PATH` for CUDA ASR.
 - `stop.*`: stops this harness if it is listening on `HARNESS_PORT` (default `7860`). It leaves unrelated processes alone and force-stops only if graceful shutdown times out.
 - `doctor.*`: checks Python, optional GPU tooling, optional llama.cpp server, and profile status.
 - `update.*`: updates this checkout from `origin/main` only. It refuses to run with uncommitted changes, uses fast-forward-only merge behavior, and reinstalls requirements when `requirements.txt` changed.
@@ -221,11 +223,15 @@ Examples:
 
 ```powershell
 .\start.ps1 -Port 7861 -Profile profiles/mock-local.json
+.\start.ps1 -ListProfiles
+.\start.ps1 -NoPrompt -NoBrowser
 .\update.ps1
 ```
 
 ```bash
 HARNESS_PORT=7861 HARNESS_PROFILE=profiles/mock-local.json ./start.sh
+./start.sh --list-profiles
+./start.sh --no-prompt --no-browser
 ./update.sh
 ```
 
