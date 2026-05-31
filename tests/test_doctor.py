@@ -1,4 +1,21 @@
 from conversational_harness import doctor
+from conversational_harness.providers.base import ProviderCapabilities, ProviderStatus
+
+
+class HealthyProvider:
+    async def check_status(self):
+        return ProviderStatus(
+            name="healthy",
+            kind="asr",
+            ready=True,
+            message="ready",
+            capabilities=ProviderCapabilities(),
+        )
+
+
+class FailingProvider:
+    async def check_status(self):
+        raise RuntimeError("boom")
 
 
 def test_llamacpp_not_selected():
@@ -107,3 +124,46 @@ def test_check_port_available_reports_owner(monkeypatch):
     assert not check.ok
     assert "PID 4321" in check.detail
     assert "python app" in check.detail
+
+
+def test_safe_provider_status_reports_exception():
+    import asyncio
+
+    status = asyncio.run(doctor.safe_provider_status("asr", FailingProvider()))
+
+    assert status["kind"] == "asr"
+    assert status["ready"] is False
+    assert "boom" in status["message"]
+
+
+def test_check_provider_statuses_continues_after_provider_failure():
+    import asyncio
+    from types import SimpleNamespace
+
+    providers = SimpleNamespace(
+        vad=HealthyProvider(),
+        asr=FailingProvider(),
+        llm=HealthyProvider(),
+        tts=HealthyProvider(),
+    )
+
+    statuses = asyncio.run(doctor.check_provider_statuses(providers))
+
+    assert len(statuses) == 4
+    assert statuses[0]["ready"] is True
+    assert statuses[1]["ready"] is False
+    assert "boom" in statuses[1]["message"]
+
+
+def test_collect_checks_continues_after_check_failure():
+    checks = doctor.collect_checks(
+        [
+            ("first", lambda: doctor.Check("first", True, "ok")),
+            ("second", lambda: (_ for _ in ()).throw(RuntimeError("broken"))),
+            ("third", lambda: doctor.Check("third", True, "still ran")),
+        ]
+    )
+
+    assert [check.name for check in checks] == ["first", "second", "third"]
+    assert checks[1].ok is False
+    assert "broken" in checks[1].detail
