@@ -20,6 +20,12 @@ class FasterWhisperASRProvider(ASRProvider):
         self.beam_size = int(config.get("beam_size", 1))
         self.vad_filter = bool(config.get("vad_filter", False))
         self.initial_prompt = config.get("initial_prompt")
+        self.condition_on_previous_text = bool(config.get("condition_on_previous_text", False))
+        self.temperature = config.get("temperature", 0)
+        self.compression_ratio_threshold = config.get("compression_ratio_threshold", 2.4)
+        self.log_prob_threshold = config.get("log_prob_threshold", -0.5)
+        self.no_speech_threshold = config.get("no_speech_threshold", 0.2)
+        self.suppress_tokens = config.get("suppress_tokens")
         self.timeout_s = float(config.get("timeout_s", 120))
         self._model = config.get("_model")
         self._load_error: str | None = None
@@ -99,13 +105,20 @@ class FasterWhisperASRProvider(ASRProvider):
             "loaded",
             f"Model ready after {round(time.perf_counter() - started, 1)}s. Running inference.",
         )
-        segments, _info = self._model.transcribe(
-            audio,
-            language=self.language,
-            beam_size=self.beam_size,
-            vad_filter=self.vad_filter,
-            initial_prompt=self.initial_prompt,
-        )
+        transcribe_options = {
+            "language": self.language,
+            "beam_size": self.beam_size,
+            "vad_filter": self.vad_filter,
+            "initial_prompt": self.initial_prompt,
+            "condition_on_previous_text": self.condition_on_previous_text,
+            "temperature": self.temperature,
+            "compression_ratio_threshold": self.compression_ratio_threshold,
+            "log_prob_threshold": self.log_prob_threshold,
+            "no_speech_threshold": self.no_speech_threshold,
+        }
+        if self.suppress_tokens is not None:
+            transcribe_options["suppress_tokens"] = self.suppress_tokens
+        segments, _info = self._model.transcribe(audio, **transcribe_options)
         logger.info("[ASR] inference call returned, iterating segments...")
         texts = []
         for segment in segments:

@@ -23,6 +23,13 @@
     "language": "en",
     "beam_size": 1,
     "vad_filter": false,
+    "condition_on_previous_text": false,
+    "temperature": 0,
+    "compression_ratio_threshold": 2.4,
+    "log_prob_threshold": -0.5,
+    "no_speech_threshold": 0.2,
+    "reject_low_energy_rms": 0.003,
+    "reject_low_energy_max_duration_ms": 900,
     "timeout_s": 180
   },
   "llm": {

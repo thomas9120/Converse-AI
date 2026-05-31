@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from conversational_harness.audio_frames import AudioFrameStats, parse_audio_frame
+from conversational_harness.audio_frames import AudioFrameStats, compute_pcm16_level, parse_audio_frame
 from conversational_harness.config import PROJECT_ROOT, load_config
 from conversational_harness.orchestrator import ConversationOrchestrator, QueueEventSink
 from conversational_harness.providers.factory import build_provider_bundle, serialize_statuses
@@ -397,7 +397,12 @@ async def websocket_events(websocket: WebSocket) -> None:
         expected_frame_ms=int(audio_config.get("frame_ms", 30)),
     )
     vad_config = BASE_CONFIG.section("vad")
+    asr_config = BASE_CONFIG.section("asr")
     min_speech_duration_ms = int(vad_config.get("min_speech_duration_ms", 0))
+    reject_low_energy_rms = float(asr_config.get("reject_low_energy_rms", 0))
+    reject_low_energy_max_duration_ms = int(
+        asr_config.get("reject_low_energy_max_duration_ms", 0)
+    )
     pre_speech_frames = int(audio_config.get("pre_speech_ms", 450)) // audio_stats.expected_frame_ms
     max_utterance_frames = int(audio_config.get("max_utterance_ms", 30000)) // audio_stats.expected_frame_ms
     bytes_per_ms = audio_stats.expected_sample_rate * 2 // 1000
@@ -561,6 +566,26 @@ async def websocket_events(websocket: WebSocket) -> None:
                                     mode=recording_mode,
                                     duration_ms=duration_ms,
                                     min_duration_ms=min_speech_duration_ms,
+                                )
+                                pcm = b""
+                        if (
+                            pcm
+                            and reject_low_energy_rms > 0
+                            and reject_low_energy_max_duration_ms > 0
+                        ):
+                            duration_ms = len(pcm) // max(bytes_per_ms, 1)
+                            level = compute_pcm16_level(pcm)
+                            if (
+                                duration_ms <= reject_low_energy_max_duration_ms
+                                and level["rms"] < reject_low_energy_rms
+                            ):
+                                await sink.emit(
+                                    "vad.speech_rejected",
+                                    mode=recording_mode,
+                                    duration_ms=duration_ms,
+                                    rms=level["rms"],
+                                    min_rms=reject_low_energy_rms,
+                                    reason="low_energy",
                                 )
                                 pcm = b""
                         if pcm and (not active_turn or active_turn.done()):
