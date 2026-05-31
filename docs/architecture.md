@@ -25,6 +25,7 @@ Conversational-AI-Harness/
 │   │   ├── runtime_settings.py        # RuntimeSettings, CharacterCard, MemoryStore
 │   │   ├── tts_runtime.py             # TTSRuntimeManager (preset/voice switching)
 │   │   ├── doctor.py                  # Diagnostics CLI
+│   │   ├── launch.py                  # Guided startup launcher
 │   │   └── providers/
 │   │       ├── base.py                # Protocol classes, data types, capabilities
 │   │       ├── factory.py             # ProviderBundle construction, builder functions
@@ -48,7 +49,7 @@ Conversational-AI-Harness/
 ├── tests/                             # pytest suite
 ├── docs/                              # Documentation
 ├── user_settings.json                 # Persisted runtime settings (sampler overrides, names, cards)
-├── start.ps1 / start.sh              # Launch uvicorn
+├── start.ps1 / start.sh              # Launch guided startup flow
 ├── doctor.ps1 / doctor.sh            # Run diagnostics
 └── install.ps1 / install.sh          # Create venv + install deps
 ```
@@ -230,7 +231,21 @@ Audio features:
 - Input level metering and VAD state display.
 - Browser-side speech detection as fallback when server-side VAD is unavailable (mock VAD mode).
 
-### 10. Diagnostics (`doctor.py`)
+### 10. Startup Launcher (`launch.py`)
+
+Shared startup coordinator used by `start.ps1` and `start.sh`.
+
+- Resolves `HARNESS_PROFILE` / `--profile` and `HARNESS_PORT` / `--port`.
+- Lists valid harness profiles with `--list-profiles` (filters out non-profile JSON such as TTS presets).
+- Runs doctor-style preflight checks before starting the app.
+- Starts uvicorn as a foreground subprocess.
+- Waits for `/api/status` before reporting the server ready.
+- Prompts before opening the browser in interactive terminals.
+- Supports non-interactive startup with `--no-prompt --no-browser`, which keeps the path Docker-friendly.
+
+The launcher checks external dependencies such as llama.cpp but does not start or supervise them.
+
+### 11. Diagnostics (`doctor.py`)
 
 CLI tool (`doctor.ps1` / `doctor.sh`) that checks:
 - Python version
@@ -309,13 +324,19 @@ Separate conversation state with:
 
 ## Startup Sequence
 
-1. `start.ps1` / `start.sh` activates the venv, adds CUDA bin paths to `PATH` (Windows), and launches `uvicorn`.
-2. `main.py` `lifespan()` handler:
+1. `start.ps1` / `start.sh` verifies `.venv`, sets `PYTHONPATH`, adds CUDA package bin paths to `PATH` (Windows), and delegates to `python -m conversational_harness.launch`.
+2. `launch.py`:
+   - Resolves profile and port from CLI args, environment variables, or defaults.
+   - Optionally prompts for profile selection in interactive terminals.
+   - Runs preflight checks for Python/package readiness, profile validity, port availability, provider status, optional GPU tooling, and llama.cpp readiness.
+   - Starts uvicorn as a foreground subprocess.
+   - Polls `/api/status` until the FastAPI app is ready, then prints the URL and optionally opens the browser.
+3. `main.py` `lifespan()` handler:
    - Loads the active profile via `load_config()`.
    - Creates `TTSRuntimeManager` from profile + TTS presets.
    - Creates `RuntimeSettings` singleton.
    - Fetches llama.cpp server defaults from `/props` endpoint.
-3. On WebSocket connect:
+4. On WebSocket connect:
    - Builds a fresh `ProviderBundle` from the profile.
    - Injects `RuntimeSettings` into the LLM provider.
    - Creates an `asyncio.Queue`-backed `EventSink`.
@@ -342,6 +363,8 @@ Separate conversation state with:
 
 8. **PCM-native audio transport**: Raw `pcm_s16le` over WebSocket, not WAV. The browser builds `AudioBuffer` directly from PCM frames, avoiding per-chunk decode overhead.
 
+9. **Shared startup logic**: Platform scripts stay thin. Startup policy lives in `launch.py`, so human-guided startup and future non-interactive/container entrypoints use the same profile, check, and readiness path.
+
 ## Testing
 
 Tests in `tests/` cover:
@@ -350,6 +373,7 @@ Tests in `tests/` cover:
 - Provider status checks (VAD, ASR, LLM, TTS)
 - Orchestrator turn handling
 - Doctor diagnostics
+- Guided launcher behavior
 - TTS runtime (preset/voice switching)
 - Character card parsing (JSON and PNG)
 - Live integration tests for llama.cpp and faster-whisper
