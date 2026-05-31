@@ -420,6 +420,7 @@ async def websocket_events(websocket: WebSocket) -> None:
     pre_speech_frames = int(audio_config.get("pre_speech_ms", 450)) // audio_stats.expected_frame_ms
     max_utterance_frames = int(audio_config.get("max_utterance_ms", 30000)) // audio_stats.expected_frame_ms
     bytes_per_ms = audio_stats.expected_sample_rate * 2 // 1000
+    expected_frame_bytes = bytes_per_ms * audio_stats.expected_frame_ms
     pre_buffer: deque[bytes] = deque(maxlen=max(1, pre_speech_frames))
     utterance_buffer = bytearray()
     recording_utterance = False
@@ -497,10 +498,15 @@ async def websocket_events(websocket: WebSocket) -> None:
                 },
             }
         )
-        asyncio.create_task(warm_asr_on_connect())
-        while True:
-            event = await queue.get()
-            await websocket.send_json(event)
+        warm_task = asyncio.create_task(warm_asr_on_connect())
+        try:
+            while True:
+                event = await queue.get()
+                await websocket.send_json(event)
+        finally:
+            warm_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await warm_task
 
     async def receiver() -> None:
         nonlocal recording_utterance, recording_mode
@@ -558,7 +564,7 @@ async def websocket_events(websocket: WebSocket) -> None:
                 pre_buffer.append(frame.data)
                 if recording_utterance:
                     utterance_buffer.extend(frame.data)
-                    if len(utterance_buffer) // len(frame.data) > max_utterance_frames:
+                    if len(utterance_buffer) > max_utterance_frames * expected_frame_bytes:
                         await sink.emit("asr.buffer_warning", message="Maximum utterance length reached; closing current utterance.")
                         recording_utterance = False
                 metrics = audio_stats.update(frame)

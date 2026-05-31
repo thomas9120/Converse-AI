@@ -35,13 +35,22 @@ def test_llamacpp_unreachable(monkeypatch):
 
 
 def test_llamacpp_loading(monkeypatch):
-    monkeypatch.setattr(doctor, "fetch_json", lambda url, timeout: {"error": {"message": "Loading model"}})
+    def fake_fetch(url, timeout):
+        if url.endswith("/health"):
+            return {"status": "loading", "error": {"message": "Loading model"}}
+        raise AssertionError(f"/v1/models must not be called: {url}")
+
+    monkeypatch.setattr(doctor, "fetch_json", fake_fetch)
 
     check = doctor.check_llamacpp({"provider": "llamacpp", "base_url": "http://127.0.0.1:8080"})
 
     assert not check.ok
     assert "not ready" in check.detail
     assert "Loading model" in check.detail
+
+
+def test_harness_port_is_fatal_check():
+    assert "Harness port" in doctor.FATAL_CHECKS
 
 
 def test_llamacpp_health_ok_but_models_missing(monkeypatch):

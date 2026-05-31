@@ -17,6 +17,8 @@ from conversational_harness.providers import build_providers
 from conversational_harness.providers.base import ProviderCapabilities, ProviderStatus
 from conversational_harness.providers.factory import serialize_status
 
+FATAL_CHECKS = {"Python", "Profile", "fastapi", "uvicorn", "Harness port"}
+
 
 @dataclass
 class Check:
@@ -50,10 +52,15 @@ def main() -> None:
         print(f"{status['kind'].upper()}: {status['name']} - {state} - {status['message']}")
     print()
     for check in checks:
-        marker = "OK" if check.ok else "WARN"
+        if check.ok:
+            marker = "OK"
+        elif check.name in FATAL_CHECKS:
+            marker = "ERR"
+        else:
+            marker = "WARN"
         print(f"[{marker}] {check.name}: {check.detail}")
 
-    if any(not check.ok for check in checks if check.name in {"Python", "Profile", "fastapi", "uvicorn"}):
+    if any(not check.ok for check in checks if check.name in FATAL_CHECKS):
         sys.exit(1)
 
 
@@ -71,7 +78,7 @@ async def safe_provider_status(kind: str, provider) -> dict:
         status = await provider.check_status()
     except Exception as exc:
         status = ProviderStatus(
-            name=getattr(provider, "__class__", type(provider)).__name__,
+            name=type(provider).__name__,
             kind=kind,
             ready=False,
             message=f"status check failed: {exc}",

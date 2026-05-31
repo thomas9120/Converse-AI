@@ -34,6 +34,7 @@ def test_faster_whisper_load_reports_failure(monkeypatch):
     provider = FasterWhisperASRProvider({"model": "missing", "timeout_s": 1})
 
     def fail():
+        provider._load_error = "load failed"
         raise RuntimeError("load failed")
 
     monkeypatch.setattr(provider, "_ensure_model", fail)
@@ -44,6 +45,37 @@ def test_faster_whisper_load_reports_failure(monkeypatch):
         assert "load failed" in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
+    assert provider._load_error is not None
+    assert not provider.status.ready
+
+
+def test_faster_whisper_load_timeout_reports_failure(monkeypatch):
+    provider = FasterWhisperASRProvider({"model": "slow", "timeout_s": 0.01})
+
+    async def timeout(coro, timeout):
+        coro.close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(asyncio, "wait_for", timeout)
+
+    try:
+        asyncio.run(provider.load())
+    except asyncio.TimeoutError:
+        pass
+    else:
+        raise AssertionError("expected TimeoutError")
+    assert "timed out" in provider._load_error
+    assert not provider.status.ready
+
+
+def test_faster_whisper_unload_clears_stale_load_error():
+    provider = FasterWhisperASRProvider({"model": "missing"})
+    provider._load_error = "old failure"
+
+    status = asyncio.run(provider.unload())
+
+    assert provider._load_error is None
+    assert status.ready
 
 
 def test_faster_whisper_transcribe_audio_uses_loaded_model():

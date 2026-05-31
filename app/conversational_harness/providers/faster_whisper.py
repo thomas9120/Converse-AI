@@ -55,16 +55,21 @@ class FasterWhisperASRProvider(ASRProvider):
         )
 
     async def check_status(self) -> ProviderStatus:
-        try:
-            import faster_whisper  # noqa: F401
-        except Exception as exc:
-            self._load_error = str(exc)
+        if self._model is None:
+            try:
+                import faster_whisper  # noqa: F401
+            except Exception as exc:
+                self._load_error = str(exc)
         return self.status
 
     async def load(self) -> ProviderStatus:
         if self._model is not None:
             return self.status
-        await asyncio.wait_for(asyncio.to_thread(self._ensure_model), timeout=self.timeout_s)
+        try:
+            await asyncio.wait_for(asyncio.to_thread(self._ensure_model), timeout=self.timeout_s)
+        except asyncio.TimeoutError:
+            self._load_error = f"Model load timed out after {self.timeout_s}s"
+            raise
         return self.status
 
     async def transcribe_text_input(self, text: str) -> AsyncIterator[TranscriptEvent]:
@@ -89,10 +94,15 @@ class FasterWhisperASRProvider(ASRProvider):
                 },
             )
         loop = asyncio.get_running_loop()
-        segments_text = await asyncio.wait_for(
-            asyncio.to_thread(self._transcribe_blocking, audio, progress, loop),
-            timeout=self.timeout_s,
-        )
+        try:
+            segments_text = await asyncio.wait_for(
+                asyncio.to_thread(self._transcribe_blocking, audio, progress, loop),
+                timeout=self.timeout_s,
+            )
+        except asyncio.TimeoutError:
+            if self._model is None:
+                self._load_error = f"Model load or transcription timed out after {self.timeout_s}s"
+            raise
         text = " ".join(part for part in segments_text if part).strip()
         if progress:
             await progress("asr.progress", {"stage": "complete", "message": "ASR transcription complete."})
@@ -160,7 +170,7 @@ class FasterWhisperASRProvider(ASRProvider):
         if self._model is not None:
             logger.info("[ASR] unloading faster-whisper model (%s/%s)", self.device, self.compute_type)
             self._model = None
-            self._load_error = None
+        self._load_error = None
         return self.status
 
     def _emit_progress_threadsafe(
