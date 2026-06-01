@@ -39,7 +39,9 @@ On Windows, you can also start a Cloudflare quick tunnel from the launcher:
 .\start.ps1 -CloudflareTunnel
 ```
 
-The tunnel prints a public Cloudflare URL in the terminal. Use this only when you intentionally want remote access to your local harness.
+The tunnel prints a public Cloudflare URL in the terminal, and the launcher reprints it as `Cloudflare tunnel URL: ...` when detected. Use this only when you intentionally want remote access to your local harness.
+
+If the local readiness check times out but the server process is still running, the launcher still starts the Cloudflare tunnel and warns that the public URL may show a temporary error until the harness finishes warming up.
 
 ## Prerequisites
 

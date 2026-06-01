@@ -1,4 +1,5 @@
 from pathlib import Path
+from tempfile import TemporaryFile
 from types import SimpleNamespace
 
 import pytest
@@ -166,13 +167,40 @@ def test_main_starts_cloudflare_tunnel_after_server_ready(monkeypatch, capsys):
     assert "Cloudflare tunnel: yes" in capsys.readouterr().out
 
 
-def test_main_does_not_start_cloudflare_tunnel_when_server_not_ready(monkeypatch, capsys):
+def test_main_starts_cloudflare_tunnel_after_readiness_timeout_when_server_still_running(monkeypatch, capsys):
     calls = []
+    tunnel = FakeProcess()
 
     monkeypatch.setattr(launch, "run_launch_checks", lambda config, port, skip_port_check=False: [])
     monkeypatch.setattr(launch, "start_server", lambda port, env: FakeProcess())
     monkeypatch.setattr(launch, "wait_for_server", lambda url: False)
     monkeypatch.setattr(launch, "maybe_open_browser", lambda url, args, interactive: calls.append("browser"))
+    monkeypatch.setattr(
+        launch,
+        "start_cloudflare_tunnel",
+        lambda port, cloudflared_url: calls.append(("tunnel", port, cloudflared_url)) or tunnel,
+    )
+
+    exit_code = launch.main(
+        ["--profile", "profiles/mock-local.json", "--no-prompt", "--no-browser", "--cloudflare-tunnel"]
+    )
+
+    assert exit_code == 0
+    assert calls == [("tunnel", 7860, launch.DEFAULT_CLOUDFLARED_URL)]
+    captured = capsys.readouterr()
+    assert "Cloudflare tunnel: yes" in captured.out
+    assert "local app may still be warming up" in captured.err
+    assert tunnel.terminated is True
+
+
+def test_main_does_not_start_cloudflare_tunnel_after_readiness_timeout_when_server_exited(monkeypatch):
+    class ExitedProcess(FakeProcess):
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr(launch, "run_launch_checks", lambda config, port, skip_port_check=False: [])
+    monkeypatch.setattr(launch, "start_server", lambda port, env: ExitedProcess(wait_result=1))
+    monkeypatch.setattr(launch, "wait_for_server", lambda url: False)
     monkeypatch.setattr(
         launch,
         "start_cloudflare_tunnel",
@@ -183,9 +211,7 @@ def test_main_does_not_start_cloudflare_tunnel_when_server_not_ready(monkeypatch
         ["--profile", "profiles/mock-local.json", "--no-prompt", "--no-browser", "--cloudflare-tunnel"]
     )
 
-    assert exit_code == 0
-    assert calls == []
-    assert "Cloudflare tunnel: yes" in capsys.readouterr().out
+    assert exit_code == 1
 
 
 def test_main_keyboard_interrupt_stops_server_and_tunnel(monkeypatch):
@@ -205,6 +231,45 @@ def test_main_keyboard_interrupt_stops_server_and_tunnel(monkeypatch):
     assert exit_code == 130
     assert server.terminated is True
     assert tunnel.terminated is True
+
+
+def test_monitor_cloudflared_output_prints_public_url(capsys):
+    with TemporaryFile(mode="w+") as output:
+        output.write("INF Requesting new quick Tunnel on trycloudflare.com...\n")
+        output.write("INF https://quiet-lake-123.trycloudflare.com\n")
+        output.seek(0)
+        process = SimpleNamespace(stdout=output)
+
+        thread = launch.monitor_cloudflared_output(process)
+        thread.join(timeout=1)
+
+    captured = capsys.readouterr().out
+    assert "INF https://quiet-lake-123.trycloudflare.com" in captured
+    assert "Cloudflare tunnel URL: https://quiet-lake-123.trycloudflare.com" in captured
+
+
+def test_start_cloudflare_tunnel_captures_output(monkeypatch, tmp_path):
+    calls = {}
+    cloudflared = tmp_path / "cloudflared.exe"
+    fake_process = SimpleNamespace(stdout=None)
+
+    def fake_popen(command, **kwargs):
+        calls["command"] = command
+        calls["kwargs"] = kwargs
+        return fake_process
+
+    monkeypatch.setattr(launch, "ensure_cloudflared", lambda cloudflared_url: cloudflared)
+    monkeypatch.setattr(launch.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(launch, "monitor_cloudflared_output", lambda process: calls.setdefault("monitored", process))
+
+    process = launch.start_cloudflare_tunnel(7861, launch.DEFAULT_CLOUDFLARED_URL)
+
+    assert process is fake_process
+    assert calls["command"] == [str(cloudflared), "tunnel", "--url", "http://localhost:7861"]
+    assert calls["kwargs"]["stdout"] == launch.subprocess.PIPE
+    assert calls["kwargs"]["stderr"] == launch.subprocess.STDOUT
+    assert calls["kwargs"]["text"] is True
+    assert calls["monitored"] is fake_process
 
 
 def test_ensure_cloudflared_downloads_missing_binary_without_real_network(monkeypatch, tmp_path):

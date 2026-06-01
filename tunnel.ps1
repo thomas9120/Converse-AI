@@ -44,4 +44,14 @@ Write-Host "Starting Cloudflare Tunnel to http://localhost:$Port ..."
 Write-Host "  Press Ctrl+C to stop."
 Write-Host ""
 
-& $cloudflaredExe tunnel --url "http://localhost:$Port"
+$printedTunnelUrl = $false
+& $cloudflaredExe tunnel --url "http://localhost:$Port" 2>&1 | ForEach-Object {
+  $line = $_.ToString()
+  Write-Host $line
+  if (-not $printedTunnelUrl -and $line -match "https://[a-zA-Z0-9.-]+\.trycloudflare\.com") {
+    $printedTunnelUrl = $true
+    Write-Host ""
+    Write-Host "Cloudflare tunnel URL: $($Matches[0])" -ForegroundColor Cyan
+    Write-Host ""
+  }
+}

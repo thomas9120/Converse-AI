@@ -4,8 +4,10 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import webbrowser
@@ -34,6 +36,7 @@ from conversational_harness.providers import build_providers
 DEFAULT_PORT = 7860
 DEFAULT_CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
 CLOUDFLARED_MIN_BYTES = 1024 * 1024
+CLOUDFLARE_TUNNEL_URL_RE = re.compile(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -81,14 +84,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if wait_for_server(url):
             print(f"Server is ready: {url}")
-            if cloudflare_tunnel:
-                try:
-                    tunnel_process = start_cloudflare_tunnel(port, args.cloudflared_url)
-                except Exception as exc:
-                    print(f"[WARN] Cloudflare tunnel was not started: {exc}", file=sys.stderr)
+            tunnel_process = maybe_start_cloudflare_tunnel(cloudflare_tunnel, port, args.cloudflared_url)
             maybe_open_browser(url, args, interactive)
         else:
             print("Server did not report ready before the timeout. Leaving process in foreground.")
+            if process.poll() is None:
+                tunnel_process = maybe_start_cloudflare_tunnel(
+                    cloudflare_tunnel,
+                    port,
+                    args.cloudflared_url,
+                    warning="The local app may still be warming up; the public URL can show a temporary error until it is ready.",
+                )
         return wait_for_process(process)
     except KeyboardInterrupt:
         print()
@@ -211,7 +217,57 @@ def start_cloudflare_tunnel(port: int, cloudflared_url: str) -> subprocess.Popen
     print("  Cloudflare will print the public URL below.")
     print("  Press Ctrl+C to stop the harness and tunnel.")
     print()
-    return subprocess.Popen(command, cwd=PROJECT_ROOT)
+    process = subprocess.Popen(
+        command,
+        cwd=PROJECT_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    monitor_cloudflared_output(process)
+    return process
+
+
+def maybe_start_cloudflare_tunnel(
+    enabled: bool,
+    port: int,
+    cloudflared_url: str,
+    *,
+    warning: str | None = None,
+) -> subprocess.Popen | None:
+    if not enabled:
+        return None
+    if warning:
+        print(f"[WARN] {warning}", file=sys.stderr)
+    try:
+        return start_cloudflare_tunnel(port, cloudflared_url)
+    except Exception as exc:
+        print(f"[WARN] Cloudflare tunnel was not started: {exc}", file=sys.stderr)
+        return None
+
+
+def monitor_cloudflared_output(process: subprocess.Popen) -> threading.Thread | None:
+    if process.stdout is None:
+        return None
+
+    def worker() -> None:
+        displayed_url = False
+        for raw_line in process.stdout:
+            line = raw_line.rstrip()
+            if line:
+                print(line)
+            if not displayed_url:
+                match = CLOUDFLARE_TUNNEL_URL_RE.search(raw_line)
+                if match:
+                    displayed_url = True
+                    print()
+                    print(f"Cloudflare tunnel URL: {match.group(0)}")
+                    print()
+
+    thread = threading.Thread(target=worker, name="cloudflared-output", daemon=True)
+    thread.start()
+    return thread
 
 
 def ensure_cloudflared(cloudflared_url: str) -> Path:
