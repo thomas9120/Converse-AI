@@ -1,4 +1,4 @@
-# Code Review — Conversational AI Harness
+# Code Review — Converse-AI
 
 Reviewed commits: `9f409fe`–`e74bdf2` (last 3 commits)  
 Files changed: `main.py`, `doctor.py`, `providers/base.py`, `providers/faster_whisper.py`, `providers/mock.py`, `tests/test_config.py`, `tests/test_doctor.py`, `tests/test_faster_whisper.py`, `doctor.ps1`, `README.md`  

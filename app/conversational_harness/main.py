@@ -9,7 +9,6 @@ import struct
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -24,10 +23,12 @@ from conversational_harness.audio_frames import (
 )
 from conversational_harness.config import PROJECT_ROOT, load_config
 from conversational_harness.orchestrator import ConversationOrchestrator, QueueEventSink
-from conversational_harness.providers.factory import build_provider_bundle, serialize_statuses
+from conversational_harness.providers.factory import (
+    build_provider_bundle,
+    serialize_statuses,
+)
 from conversational_harness.runtime_settings import (
     MemoryStore,
-    RuntimeSettings,
     load_runtime_settings,
     parse_character_json,
     parse_character_png,
@@ -51,7 +52,7 @@ async def lifespan(app: FastAPI):
         ACTIVE_QUEUES.discard(queue)
 
 
-app = FastAPI(title="Conversational AI Harness", lifespan=lifespan)
+app = FastAPI(title="Converse-AI", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 
 BASE_CONFIG = load_config()
@@ -70,12 +71,20 @@ async def _fetch_llm_server_defaults() -> None:
     base_url = str(llm_config.get("base_url", "http://127.0.0.1:8080")).rstrip("/")
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=1.0, read=3.0)) as client:
+
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=1.0, read=3.0)
+        ) as client:
             resp = await client.get(f"{base_url}/props")
             resp.raise_for_status()
-            params = resp.json().get("default_generation_settings", {}).get("params", {})
+            params = (
+                resp.json().get("default_generation_settings", {}).get("params", {})
+            )
             RUNTIME_SETTINGS.set_server_defaults(params)
-            logger.info("Fetched llama.cpp server defaults: %s", list(RUNTIME_SETTINGS.server_defaults.keys()))
+            logger.info(
+                "Fetched llama.cpp server defaults: %s",
+                list(RUNTIME_SETTINGS.server_defaults.keys()),
+            )
     except Exception as exc:
         logger.info("Could not fetch llama.cpp server defaults: %s", exc)
 
@@ -186,16 +195,22 @@ def _valid_summary_messages(raw_messages: Any) -> list[dict[str, str]]:
 
 
 @app.post("/api/companion/memory/summarize")
-async def summarize_companion_memory(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+async def summarize_companion_memory(
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     messages = _valid_summary_messages((payload or {}).get("messages"))
     for hook in list(COMPANION_HISTORY_HOOKS):
         if messages:
             break
         messages = _valid_summary_messages(hook())
     if not messages:
-        raise HTTPException(status_code=400, detail="No companion conversation to summarize")
+        raise HTTPException(
+            status_code=400, detail="No companion conversation to summarize"
+        )
 
-    providers = build_provider_bundle(BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider())
+    providers = build_provider_bundle(
+        BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider()
+    )
     if hasattr(providers.llm, "set_runtime_settings"):
         providers.llm.set_runtime_settings(RUNTIME_SETTINGS)
     RUNTIME_SETTINGS.active_mode = "companion"
@@ -216,7 +231,9 @@ async def summarize_companion_memory(payload: dict[str, Any] | None = None) -> d
         async for token in providers.llm.stream_response(summary_prompt):
             chunks.append(token)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Memory summary failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"Memory summary failed: {exc}"
+        ) from exc
     title = datetime.now().strftime("%Y-%m-%d %H:%M")
     try:
         text = MEMORY_STORE.append_summary("".join(chunks), title)
@@ -247,25 +264,37 @@ async def upload_character(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(file_data, str) or not file_data:
         raise HTTPException(status_code=400, detail="file data is required")
     if not (filename.endswith(".png") or filename.endswith(".json")):
-        raise HTTPException(status_code=400, detail="Unsupported file type. Use .png or .json")
+        raise HTTPException(
+            status_code=400, detail="Unsupported file type. Use .png or .json"
+        )
     # Keep character card uploads small; they are prompt metadata, not model assets.
     if len(file_data) > MAX_CHARACTER_UPLOAD_BASE64_CHARS:
-        raise HTTPException(status_code=400, detail="Character card upload is too large")
+        raise HTTPException(
+            status_code=400, detail="Character card upload is too large"
+        )
     try:
         raw = base64.b64decode(file_data, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="file data must be valid base64") from exc
+        raise HTTPException(
+            status_code=400, detail="file data must be valid base64"
+        ) from exc
     if len(raw) > MAX_CHARACTER_UPLOAD_BYTES:
-        raise HTTPException(status_code=400, detail="Character card upload is too large")
+        raise HTTPException(
+            status_code=400, detail="Character card upload is too large"
+        )
     try:
         if filename.endswith(".png"):
             card = parse_character_png(raw)
         else:
             card = parse_character_json(raw.decode("utf-8"))
     except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="Character JSON must be valid UTF-8") from exc
+        raise HTTPException(
+            status_code=400, detail="Character JSON must be valid UTF-8"
+        ) from exc
     except (json.JSONDecodeError, ValueError, IndexError, struct.error) as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid character card: {exc}") from exc
+        raise HTTPException(
+            status_code=400, detail=f"Invalid character card: {exc}"
+        ) from exc
     if not card.name:
         raise HTTPException(status_code=400, detail="Character card must have a name")
     RUNTIME_SETTINGS.set_character(card)
@@ -308,7 +337,9 @@ async def merged_profile_raw() -> dict[str, Any]:
 
 
 async def provider_statuses_payload() -> list[dict[str, Any]]:
-    providers = build_provider_bundle(BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider())
+    providers = build_provider_bundle(
+        BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider()
+    )
     return await provider_statuses_for_bundle(providers)
 
 
@@ -393,7 +424,9 @@ async def seed_character_first_messages() -> None:
 @app.websocket("/ws/events")
 async def websocket_events(websocket: WebSocket) -> None:
     await websocket.accept()
-    providers = build_provider_bundle(BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider())
+    providers = build_provider_bundle(
+        BASE_CONFIG, tts_provider=TTS_MANAGER.get_provider()
+    )
     if hasattr(providers.llm, "set_runtime_settings"):
         providers.llm.set_runtime_settings(RUNTIME_SETTINGS)
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -417,8 +450,13 @@ async def websocket_events(websocket: WebSocket) -> None:
     trim_silence_frame_ms = int(
         asr_config.get("trim_silence_frame_ms", audio_stats.expected_frame_ms)
     )
-    pre_speech_frames = int(audio_config.get("pre_speech_ms", 450)) // audio_stats.expected_frame_ms
-    max_utterance_frames = int(audio_config.get("max_utterance_ms", 30000)) // audio_stats.expected_frame_ms
+    pre_speech_frames = (
+        int(audio_config.get("pre_speech_ms", 450)) // audio_stats.expected_frame_ms
+    )
+    max_utterance_frames = (
+        int(audio_config.get("max_utterance_ms", 30000))
+        // audio_stats.expected_frame_ms
+    )
     bytes_per_ms = audio_stats.expected_sample_rate * 2 // 1000
     expected_frame_bytes = bytes_per_ms * audio_stats.expected_frame_ms
     pre_buffer: deque[bytes] = deque(maxlen=max(1, pre_speech_frames))
@@ -487,7 +525,9 @@ async def websocket_events(websocket: WebSocket) -> None:
 
     async def sender() -> None:
         raw = await merged_profile_raw()
-        await websocket.send_json({"type": "profile.loaded", "payload": {"name": BASE_CONFIG.name}})
+        await websocket.send_json(
+            {"type": "profile.loaded", "payload": {"name": BASE_CONFIG.name}}
+        )
         await websocket.send_json(
             {
                 "type": "providers.status",
@@ -511,6 +551,7 @@ async def websocket_events(websocket: WebSocket) -> None:
     async def receiver() -> None:
         nonlocal recording_utterance, recording_mode
         active_turn: asyncio.Task | None = None
+
         # Await cancellation before replacing turns so stale streams cannot race the next turn.
         async def cancel_active_turn(reason: str) -> None:
             nonlocal active_turn
@@ -530,21 +571,33 @@ async def websocket_events(websocket: WebSocket) -> None:
             if message_type == "user.text":
                 text = str(payload.get("text", "")).strip()
                 RUNTIME_SETTINGS.active_mode = mode
-                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")), mode=mode)
+                orchestrator.set_system_prompt(
+                    str(payload.get("system_prompt", "")), mode=mode
+                )
                 if not text:
                     continue
                 orchestrator.providers.tts = TTS_MANAGER.get_provider()
                 await cancel_active_turn("new_user_text")
-                active_turn = asyncio.create_task(orchestrator.handle_text_turn(text, mode=mode))
+                active_turn = asyncio.create_task(
+                    orchestrator.handle_text_turn(text, mode=mode)
+                )
             elif message_type == "user.continue":
                 RUNTIME_SETTINGS.active_mode = mode
                 orchestrator.providers.tts = TTS_MANAGER.get_provider()
                 await cancel_active_turn("continue")
-                active_turn = asyncio.create_task(orchestrator.handle_continue(mode=mode))
+                active_turn = asyncio.create_task(
+                    orchestrator.handle_continue(mode=mode)
+                )
             elif message_type == "system_prompt.update":
                 RUNTIME_SETTINGS.active_mode = mode
-                orchestrator.set_system_prompt(str(payload.get("system_prompt", "")), mode=mode)
-                await sink.emit("system_prompt.updated", mode=mode, enabled=bool(orchestrator.state.system_prompt))
+                orchestrator.set_system_prompt(
+                    str(payload.get("system_prompt", "")), mode=mode
+                )
+                await sink.emit(
+                    "system_prompt.updated",
+                    mode=mode,
+                    enabled=bool(orchestrator.state.system_prompt),
+                )
             elif message_type == "conversation.clear":
                 await cancel_active_turn("conversation_clear")
                 await orchestrator.clear_conversation(mode=mode)
@@ -552,7 +605,10 @@ async def websocket_events(websocket: WebSocket) -> None:
                 await orchestrator.cancel_tts("manual")
             elif message_type == "vad.speech_start":
                 RUNTIME_SETTINGS.active_mode = mode
-                orchestrator.set_system_prompt(str(payload.get("system_prompt", orchestrator.state.system_prompt)), mode=mode)
+                orchestrator.set_system_prompt(
+                    str(payload.get("system_prompt", orchestrator.state.system_prompt)),
+                    mode=mode,
+                )
                 await orchestrator.cancel_tts("barge_in")
                 await sink.emit("vad.speech_start", mode=mode, source="browser")
             elif message_type == "audio.frame":
@@ -564,8 +620,14 @@ async def websocket_events(websocket: WebSocket) -> None:
                 pre_buffer.append(frame.data)
                 if recording_utterance:
                     utterance_buffer.extend(frame.data)
-                    if len(utterance_buffer) > max_utterance_frames * expected_frame_bytes:
-                        await sink.emit("asr.buffer_warning", message="Maximum utterance length reached; closing current utterance.")
+                    if (
+                        len(utterance_buffer)
+                        > max_utterance_frames * expected_frame_bytes
+                    ):
+                        await sink.emit(
+                            "asr.buffer_warning",
+                            message="Maximum utterance length reached; closing current utterance.",
+                        )
                         recording_utterance = False
                 metrics = audio_stats.update(frame)
                 if metrics:

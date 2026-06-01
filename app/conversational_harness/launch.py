@@ -16,7 +16,11 @@ from typing import Sequence
 
 import httpx
 
-from conversational_harness.config import PROJECT_ROOT, load_config, resolve_profile_path
+from conversational_harness.config import (
+    PROJECT_ROOT,
+    load_config,
+    resolve_profile_path,
+)
 from conversational_harness.doctor import (
     FATAL_CHECKS,
     Check,
@@ -57,7 +61,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[ERR] Profile: {exc}", file=sys.stderr)
         return 1
 
-    print("Conversational AI Harness")
+    print("Converse-AI")
     print(f"  Profile: {config.name}")
     print(f"  Path:    {relative_display(config.path)}")
     print(f"  URL:     http://127.0.0.1:{port}")
@@ -84,10 +88,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if wait_for_server(url):
             print(f"Server is ready: {url}")
-            tunnel_process = maybe_start_cloudflare_tunnel(cloudflare_tunnel, port, args.cloudflared_url)
+            tunnel_process = maybe_start_cloudflare_tunnel(
+                cloudflare_tunnel, port, args.cloudflared_url
+            )
             maybe_open_browser(url, args, interactive)
         else:
-            print("Server did not report ready before the timeout. Leaving process in foreground.")
+            print(
+                "Server did not report ready before the timeout. Leaving process in foreground."
+            )
             if process.poll() is None:
                 tunnel_process = maybe_start_cloudflare_tunnel(
                     cloudflare_tunnel,
@@ -107,23 +115,59 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Start the Conversational AI Harness.")
+    parser = argparse.ArgumentParser(description="Start Converse-AI.")
     parser.add_argument("--profile", help="Profile JSON path to use.")
-    parser.add_argument("--port", type=int, help=f"HTTP port to bind. Defaults to HARNESS_PORT or {DEFAULT_PORT}.")
-    parser.add_argument("--list-profiles", action="store_true", help="List available profiles and exit.")
-    parser.add_argument("--no-browser", action="store_true", help="Do not open the browser.")
-    parser.add_argument("--open-browser", action="store_true", help="Open the browser after the server is ready.")
-    parser.add_argument("--no-prompt", action="store_true", help="Disable interactive prompts.")
-    parser.add_argument("--skip-checks", action="store_true", help="Skip preflight checks.")
-    parser.add_argument("--skip-port-check", action="store_true", help="Skip the preflight port availability check.")
-    parser.add_argument("--cloudflare-tunnel", action="store_true", help="Start a Cloudflare quick tunnel after the server is ready.")
-    parser.add_argument("--no-cloudflare-tunnel", action="store_true", help="Do not prompt for or start a Cloudflare quick tunnel.")
-    parser.add_argument("--cloudflared-url", default=DEFAULT_CLOUDFLARED_URL, help="Windows cloudflared download URL.")
+    parser.add_argument(
+        "--port",
+        type=int,
+        help=f"HTTP port to bind. Defaults to HARNESS_PORT or {DEFAULT_PORT}.",
+    )
+    parser.add_argument(
+        "--list-profiles", action="store_true", help="List available profiles and exit."
+    )
+    parser.add_argument(
+        "--no-browser", action="store_true", help="Do not open the browser."
+    )
+    parser.add_argument(
+        "--open-browser",
+        action="store_true",
+        help="Open the browser after the server is ready.",
+    )
+    parser.add_argument(
+        "--no-prompt", action="store_true", help="Disable interactive prompts."
+    )
+    parser.add_argument(
+        "--skip-checks", action="store_true", help="Skip preflight checks."
+    )
+    parser.add_argument(
+        "--skip-port-check",
+        action="store_true",
+        help="Skip the preflight port availability check.",
+    )
+    parser.add_argument(
+        "--cloudflare-tunnel",
+        action="store_true",
+        help="Start a Cloudflare quick tunnel after the server is ready.",
+    )
+    parser.add_argument(
+        "--no-cloudflare-tunnel",
+        action="store_true",
+        help="Do not prompt for or start a Cloudflare quick tunnel.",
+    )
+    parser.add_argument(
+        "--cloudflared-url",
+        default=DEFAULT_CLOUDFLARED_URL,
+        help="Windows cloudflared download URL.",
+    )
     return parser.parse_args(argv)
 
 
 def list_profiles() -> list[Path]:
-    return sorted(profile for profile in (PROJECT_ROOT / "profiles").glob("*.json") if is_harness_profile(profile))
+    return sorted(
+        profile
+        for profile in (PROJECT_ROOT / "profiles").glob("*.json")
+        if is_harness_profile(profile)
+    )
 
 
 def is_harness_profile(path: Path) -> bool:
@@ -132,7 +176,9 @@ def is_harness_profile(path: Path) -> bool:
             raw = json.load(handle)
     except Exception:
         return False
-    return isinstance(raw, dict) and any(key in raw for key in ("vad", "asr", "llm", "tts"))
+    return isinstance(raw, dict) and any(
+        key in raw for key in ("vad", "asr", "llm", "tts")
+    )
 
 
 def print_profiles(profiles: Sequence[Path]) -> None:
@@ -140,7 +186,9 @@ def print_profiles(profiles: Sequence[Path]) -> None:
         print(relative_display(profile))
 
 
-def choose_profile(explicit: str | None, profiles: Sequence[Path], interactive: bool) -> Path:
+def choose_profile(
+    explicit: str | None, profiles: Sequence[Path], interactive: bool
+) -> Path:
     env_profile = os.environ.get("HARNESS_PROFILE")
     if explicit or env_profile or not interactive:
         return resolve_profile_path(explicit)
@@ -162,7 +210,9 @@ def choose_profile(explicit: str | None, profiles: Sequence[Path], interactive: 
     return selected
 
 
-def run_launch_checks(config, port: int, *, skip_port_check: bool = False) -> list[Check]:
+def run_launch_checks(
+    config, port: int, *, skip_port_check: bool = False
+) -> list[Check]:
     providers = build_providers(config)
     provider_statuses = asyncio.run(check_provider_statuses(providers))
     checks = collect_checks(
@@ -171,7 +221,11 @@ def run_launch_checks(config, port: int, *, skip_port_check: bool = False) -> li
             ("Profile", lambda: check_profile(config.path)),
             ("fastapi", lambda: check_package("fastapi")),
             ("uvicorn", lambda: check_package("uvicorn")),
-            *([] if skip_port_check else [("Harness port", lambda: check_port_available(port))]),
+            *(
+                []
+                if skip_port_check
+                else [("Harness port", lambda: check_port_available(port))]
+            ),
             ("CUDA tooling", check_cuda_tooling),
             ("Vulkan tooling", check_vulkan_tooling),
             ("llama.cpp server", lambda: check_llamacpp(config.section("llm"))),
@@ -179,7 +233,13 @@ def run_launch_checks(config, port: int, *, skip_port_check: bool = False) -> li
     )
     for status in provider_statuses:
         state = "ready" if status["ready"] else "not ready"
-        checks.append(Check(f"{status['kind'].upper()} provider", bool(status["ready"]), f"{status['name']} - {state} - {status['message']}"))
+        checks.append(
+            Check(
+                f"{status['kind'].upper()} provider",
+                bool(status["ready"]),
+                f"{status['name']} - {state} - {status['message']}",
+            )
+        )
     return checks
 
 
@@ -272,7 +332,9 @@ def monitor_cloudflared_output(process: subprocess.Popen) -> threading.Thread | 
 
 def ensure_cloudflared(cloudflared_url: str) -> Path:
     if os.name != "nt":
-        raise RuntimeError("integrated Cloudflare tunnel download is currently supported on Windows only")
+        raise RuntimeError(
+            "integrated Cloudflare tunnel download is currently supported on Windows only"
+        )
 
     tools_dir = PROJECT_ROOT / "tools"
     cloudflared = tools_dir / "cloudflared.exe"
@@ -291,7 +353,9 @@ def ensure_cloudflared(cloudflared_url: str) -> Path:
 
     if not cloudflared.exists() or cloudflared.stat().st_size < CLOUDFLARED_MIN_BYTES:
         cloudflared.unlink(missing_ok=True)
-        raise RuntimeError("download appeared to succeed but the file is missing or too small")
+        raise RuntimeError(
+            "download appeared to succeed but the file is missing or too small"
+        )
 
     print(f"  Saved to {cloudflared}")
     return cloudflared

@@ -1,6 +1,6 @@
-# Conversational AI Harness Agent Notes
+# Converse-AI Agent Notes
 
-This project is intended to become a local, modular conversational AI harness for realtime voice interaction. Keep implementation choices boring, swappable, and measurable. The main stack direction is:
+This project is intended to become a local, modular Converse-AI for realtime voice interaction. Keep implementation choices boring, swappable, and measurable. The main stack direction is:
 
 - VAD: Silero VAD, preferably ONNX on CPU.
 - ASR: faster-whisper first, with other STT backends added only behind provider interfaces when locally proven.

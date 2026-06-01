@@ -1,0 +1,47 @@
+{
+  "files": {
+    "app/static/index.html": {
+      "modifiedRanges": [
+        {
+          "start": 1,
+          "end": 369
+        }
+      ],
+      "importsChanged": false,
+      "lastEdit": "2026-06-01T19:53:14.697Z"
+    },
+    "app/conversational_harness/__init__.py": {
+      "modifiedRanges": [
+        {
+          "start": 1,
+          "end": 6
+        }
+      ],
+      "importsChanged": false,
+      "lastEdit": "2026-06-01T19:53:14.701Z"
+    },
+    "app/conversational_harness/launch.py": {
+      "modifiedRanges": [
+        {
+          "start": 1,
+          "end": 424
+        }
+      ],
+      "importsChanged": true,
+      "lastEdit": "2026-06-01T19:53:14.707Z"
+    },
+    "app/conversational_harness/main.py": {
+      "modifiedRanges": [
+        {
+          "start": 1,
+          "end": 772
+        }
+      ],
+      "importsChanged": true,
+      "lastEdit": "2026-06-01T19:53:14.711Z"
+    }
+  },
+  "turnCycles": 0,
+  "maxCycles": 3,
+  "lastUpdated": "2026-06-01T19:53:14.711Z"
+}
