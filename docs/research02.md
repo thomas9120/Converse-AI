@@ -1,4 +1,4 @@
-# Research: Non-CUDA ASR Options for Realtime Conversational AI Harness
+# Research: Non-CUDA ASR Options for Realtime Converse-AI
 
 ## Summary
 

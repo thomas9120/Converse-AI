@@ -1,23 +1,27 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Conversational AI Harness</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Converse-AI</title>
+    <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <main class="shell" data-view="chat">
       <section class="topbar">
         <div>
-          <h1>Conversational AI Harness</h1>
+          <h1>Converse-AI</h1>
           <p id="profile">Loading profile...</p>
         </div>
         <div class="controls">
           <nav class="tab-nav">
             <button id="tab-chat" class="tab active" type="button">Chat</button>
-            <button id="tab-companion" class="tab" type="button">Companion</button>
-            <button id="tab-settings" class="tab" type="button">Settings</button>
+            <button id="tab-companion" class="tab" type="button">
+              Companion
+            </button>
+            <button id="tab-settings" class="tab" type="button">
+              Settings
+            </button>
           </nav>
           <button id="theme-toggle" type="button">Dark Mode</button>
           <button id="mic" type="button" disabled>Start Mic</button>
@@ -32,7 +36,11 @@
 
       <section class="prompt-panel">
         <label for="system-prompt">System prompt</label>
-        <textarea id="system-prompt" rows="3" placeholder="Optional instructions for the assistant. Applies to typed and voice turns."></textarea>
+        <textarea
+          id="system-prompt"
+          rows="3"
+          placeholder="Optional instructions for the assistant. Applies to typed and voice turns."
+        ></textarea>
       </section>
 
       <section class="tts-panel">
@@ -68,7 +76,11 @@
 
       <section class="view-chat">
         <section class="workspace">
-          <section class="conversation" id="conversation" aria-live="polite"></section>
+          <section
+            class="conversation"
+            id="conversation"
+            aria-live="polite"
+          ></section>
           <aside class="side">
             <h2>Latency</h2>
             <dl id="latency"></dl>
@@ -78,7 +90,12 @@
         </section>
 
         <form class="composer" id="composer">
-          <input id="text" autocomplete="off" placeholder="Type a test utterance while the audio path is being wired..." aria-label="Utterance">
+          <input
+            id="text"
+            autocomplete="off"
+            placeholder="Type a test utterance while the audio path is being wired..."
+            aria-label="Utterance"
+          />
           <button id="continue-btn" type="button" disabled>Continue</button>
           <button id="send" type="submit" disabled>Send</button>
         </form>
@@ -88,47 +105,111 @@
         <section class="companion-config">
           <div class="settings-row">
             <label for="companion-user-name">Your name</label>
-            <input id="companion-user-name" type="text" placeholder="You" autocomplete="off">
+            <input
+              id="companion-user-name"
+              type="text"
+              placeholder="You"
+              autocomplete="off"
+            />
           </div>
           <div class="settings-row">
             <label for="companion-ai-name">AI name</label>
-            <input id="companion-ai-name" type="text" placeholder="Companion" autocomplete="off">
+            <input
+              id="companion-ai-name"
+              type="text"
+              placeholder="Companion"
+              autocomplete="off"
+            />
           </div>
           <div class="settings-row">
             <label for="companion-memory-enabled">Memory</label>
-            <input id="companion-memory-enabled" type="checkbox">
+            <input id="companion-memory-enabled" type="checkbox" />
           </div>
           <div class="settings-row wide">
             <label for="companion-system-prompt">Companion prompt</label>
-            <textarea id="companion-system-prompt" rows="3" placeholder="Persistent companion-mode instructions."></textarea>
+            <textarea
+              id="companion-system-prompt"
+              rows="3"
+              placeholder="Persistent companion-mode instructions."
+            ></textarea>
           </div>
         </section>
 
         <section class="workspace companion-workspace">
-          <section class="conversation" id="companion-conversation" aria-live="polite"></section>
+          <section
+            class="conversation"
+            id="companion-conversation"
+            aria-live="polite"
+          ></section>
           <aside class="side companion-side">
             <h2>Memory</h2>
-            <textarea id="companion-memory" rows="10" placeholder="No saved memory yet."></textarea>
+            <textarea
+              id="companion-memory"
+              rows="10"
+              placeholder="No saved memory yet."
+            ></textarea>
             <div class="settings-actions">
               <button id="memory-save" type="button">Save Memory</button>
-              <button id="memory-summarize" type="button">Summarize Chat</button>
+              <button id="memory-summarize" type="button">
+                Summarize Chat
+              </button>
               <button id="memory-clear" type="button">Clear Memory</button>
             </div>
             <p id="memory-status" class="settings-hint">Memory idle</p>
             <h2>Sampler</h2>
             <div class="compact-sampler">
-              <input id="companion-sampler-temperature" type="number" step="0.05" min="0" max="2" aria-label="Temperature" placeholder="Temperature">
-              <input id="companion-sampler-top-p" type="number" step="0.05" min="0" max="1" aria-label="Top P" placeholder="Top P">
-              <input id="companion-sampler-min-p" type="number" step="0.05" min="0" max="1" aria-label="Min P" placeholder="Min P">
-              <input id="companion-sampler-max-tokens" type="number" step="1" min="1" aria-label="Max Tokens" placeholder="Max Tokens">
+              <input
+                id="companion-sampler-temperature"
+                type="number"
+                step="0.05"
+                min="0"
+                max="2"
+                aria-label="Temperature"
+                placeholder="Temperature"
+              />
+              <input
+                id="companion-sampler-top-p"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                aria-label="Top P"
+                placeholder="Top P"
+              />
+              <input
+                id="companion-sampler-min-p"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                aria-label="Min P"
+                placeholder="Min P"
+              />
+              <input
+                id="companion-sampler-max-tokens"
+                type="number"
+                step="1"
+                min="1"
+                aria-label="Max Tokens"
+                placeholder="Max Tokens"
+              />
             </div>
-            <button id="companion-sampler-reset" type="button">Reset Companion Sampler</button>
+            <button id="companion-sampler-reset" type="button">
+              Reset Companion Sampler
+            </button>
           </aside>
         </section>
 
         <form class="composer" id="companion-composer">
-          <input id="companion-text" autocomplete="off" placeholder="Talk with companion mode..." aria-label="Companion utterance">
-          <button id="companion-continue-btn" type="button" disabled>Continue</button>
+          <input
+            id="companion-text"
+            autocomplete="off"
+            placeholder="Talk with companion mode..."
+            aria-label="Companion utterance"
+          />
+          <button id="companion-continue-btn" type="button" disabled>
+            Continue
+          </button>
           <button id="companion-send" type="submit" disabled>Send</button>
         </form>
       </section>
@@ -139,60 +220,122 @@
             <h2>Names</h2>
             <div class="settings-row">
               <label for="user-name">Your name</label>
-              <input id="user-name" type="text" placeholder="You" autocomplete="off">
+              <input
+                id="user-name"
+                type="text"
+                placeholder="You"
+                autocomplete="off"
+              />
             </div>
             <div class="settings-row">
               <label for="ai-name">AI name</label>
-              <input id="ai-name" type="text" placeholder="Assistant" autocomplete="off">
+              <input
+                id="ai-name"
+                type="text"
+                placeholder="Assistant"
+                autocomplete="off"
+              />
             </div>
-            <p class="settings-hint">Names are used in chat display and injected into the system prompt.</p>
+            <p class="settings-hint">
+              Names are used in chat display and injected into the system
+              prompt.
+            </p>
           </article>
 
           <article class="settings-card">
             <h2>Sampler Settings</h2>
             <div class="settings-row">
               <label for="sampler-temperature">Temperature</label>
-              <input id="sampler-temperature" type="number" step="0.05" min="0" max="2">
+              <input
+                id="sampler-temperature"
+                type="number"
+                step="0.05"
+                min="0"
+                max="2"
+              />
             </div>
             <div class="settings-row">
               <label for="sampler-top-k">Top K</label>
-              <input id="sampler-top-k" type="number" step="1" min="0">
+              <input id="sampler-top-k" type="number" step="1" min="0" />
             </div>
             <div class="settings-row">
               <label for="sampler-top-p">Top P</label>
-              <input id="sampler-top-p" type="number" step="0.05" min="0" max="1">
+              <input
+                id="sampler-top-p"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+              />
             </div>
             <div class="settings-row">
               <label for="sampler-min-p">Min P</label>
-              <input id="sampler-min-p" type="number" step="0.05" min="0" max="1">
+              <input
+                id="sampler-min-p"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+              />
             </div>
             <div class="settings-row">
               <label for="sampler-repeat-penalty">Repeat Penalty</label>
-              <input id="sampler-repeat-penalty" type="number" step="0.05" min="1" max="2">
+              <input
+                id="sampler-repeat-penalty"
+                type="number"
+                step="0.05"
+                min="1"
+                max="2"
+              />
             </div>
             <div class="settings-row">
               <label for="sampler-frequency-penalty">Frequency Penalty</label>
-              <input id="sampler-frequency-penalty" type="number" step="0.05" min="0" max="2">
+              <input
+                id="sampler-frequency-penalty"
+                type="number"
+                step="0.05"
+                min="0"
+                max="2"
+              />
             </div>
             <div class="settings-row">
               <label for="sampler-presence-penalty">Presence Penalty</label>
-              <input id="sampler-presence-penalty" type="number" step="0.05" min="0" max="2">
+              <input
+                id="sampler-presence-penalty"
+                type="number"
+                step="0.05"
+                min="0"
+                max="2"
+              />
             </div>
             <div class="settings-row">
               <label for="sampler-max-tokens">Max Tokens</label>
-              <input id="sampler-max-tokens" type="number" step="1" min="1">
+              <input id="sampler-max-tokens" type="number" step="1" min="1" />
             </div>
             <div class="settings-actions">
-              <button id="sampler-reset" type="button">Reset to Defaults</button>
+              <button id="sampler-reset" type="button">
+                Reset to Defaults
+              </button>
             </div>
-            <p class="settings-hint">Changes apply to the next LLM request. Settings persist across restarts.</p>
+            <p class="settings-hint">
+              Changes apply to the next LLM request. Settings persist across
+              restarts.
+            </p>
           </article>
 
           <article class="settings-card">
             <h2>Character Card</h2>
             <div class="character-drop" id="character-drop">
-              <p>Drop a <strong>.png</strong> or <strong>.json</strong> character card here, or click to browse</p>
-              <input id="character-file" type="file" accept=".png,.json" hidden>
+              <p>
+                Drop a <strong>.png</strong> or <strong>.json</strong> character
+                card here, or click to browse
+              </p>
+              <input
+                id="character-file"
+                type="file"
+                accept=".png,.json"
+                hidden
+              />
             </div>
             <div id="character-info" class="character-info hidden">
               <div class="character-header">
@@ -206,8 +349,14 @@
               </details>
             </div>
             <div class="settings-row">
-              <label for="additional-system-prompt">Additional instructions</label>
-              <textarea id="additional-system-prompt" rows="3" placeholder="Extra instructions appended after the character card or names."></textarea>
+              <label for="additional-system-prompt"
+                >Additional instructions</label
+              >
+              <textarea
+                id="additional-system-prompt"
+                rows="3"
+                placeholder="Extra instructions appended after the character card or names."
+              ></textarea>
             </div>
           </article>
         </div>

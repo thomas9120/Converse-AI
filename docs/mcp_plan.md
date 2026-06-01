@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add Model Context Protocol (MCP) tool-calling support to the Conversational AI Harness so companion mode can execute assistant tasks (weather, news, calendar, web search, home automation) via MCP servers, using llama.cpp's native tool calling.
+Add Model Context Protocol (MCP) tool-calling support to Converse-AI so companion mode can execute assistant tasks (weather, news, calendar, web search, home automation) via MCP servers, using llama.cpp's native tool calling.
 
 ---
 

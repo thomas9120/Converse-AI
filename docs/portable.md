@@ -2,7 +2,7 @@
 
 ## Goal
 
-Transform the Conversational AI Harness into a self-contained portable folder that users can unzip and run without installing Python, conda, or system dependencies. Models download on-demand and stay separate from the app, enabling updates without re-downloading multi-GB model files.
+Transform Converse-AI into a self-contained portable folder that users can unzip and run without installing Python, conda, or system dependencies. Models download on-demand and stay separate from the app, enabling updates without re-downloading multi-GB model files.
 
 ## Background
 
@@ -313,7 +313,7 @@ Create the final distributable ZIP.
 - [ ] Create `start.bat` (Windows double-click launcher)
   ```batch
   @echo off
-  echo Starting Conversational AI Harness...
+  echo Starting Converse-AI...
   powershell -ExecutionPolicy Bypass -File start.ps1
   pause
   ```

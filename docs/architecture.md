@@ -2,7 +2,7 @@
 
 ## Overview
 
-Conversational AI Harness is a local, modular realtime voice+text conversation system. It connects four swappable AI components — Voice Activity Detection (VAD), Automatic Speech Recognition (ASR), Large Language Model (LLM), and Text-to-Speech (TTS) — behind provider interfaces, orchestrated by a pipeline that turns microphone audio into spoken AI responses in real time.
+Converse-AI is a local, modular realtime voice+text conversation system. It connects four swappable AI components — Voice Activity Detection (VAD), Automatic Speech Recognition (ASR), Large Language Model (LLM), and Text-to-Speech (TTS) — behind provider interfaces, orchestrated by a pipeline that turns microphone audio into spoken AI responses in real time.
 
 The server is a FastAPI application serving a browser-based UI over HTTP/WebSocket. All inference runs locally (CPU or CUDA). No cloud APIs are required.
 

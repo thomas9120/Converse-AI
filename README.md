@@ -1,4 +1,4 @@
-# Conversational AI Harness
+# Converse-AI
 
 A local, modular harness for experimenting with realtime conversational AI stacks.
 
