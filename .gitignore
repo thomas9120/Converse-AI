@@ -43,3 +43,6 @@ Thumbs.db
 .idea/
 .vscode/
 nul
+/.pi-lens
+/.pi-lens/cache
+/.pi-lens

@@ -32,47 +32,59 @@
         </div>
       </section>
 
-      <section class="status-grid" id="providers"></section>
+      <details open class="panel-details" data-panel="status">
+        <summary>Providers</summary>
+        <section class="status-grid" id="providers"></section>
+      </details>
 
-      <section class="prompt-panel">
-        <label for="system-prompt">System prompt</label>
-        <textarea
-          id="system-prompt"
-          rows="3"
-          placeholder="Optional instructions for the assistant. Applies to typed and voice turns."
-        ></textarea>
-      </section>
+      <details open class="panel-details" data-panel="prompt">
+        <summary>System Prompt</summary>
+        <section class="prompt-panel">
+          <label for="system-prompt">System prompt</label>
+          <textarea
+            id="system-prompt"
+            rows="3"
+            placeholder="Optional instructions for the assistant. Applies to typed and voice turns."
+          ></textarea>
+        </section>
+      </details>
 
-      <section class="tts-panel">
-        <label for="tts-preset">TTS preset</label>
-        <select id="tts-preset">
-          <option value="">Loading presets...</option>
-        </select>
-        <label for="tts-voice">Voice</label>
-        <select id="tts-voice">
-          <option value="">Loading voices...</option>
-        </select>
-        <div class="tts-actions">
-          <button id="tts-load" type="button">Load</button>
-          <button id="tts-unload" type="button">Unload</button>
-        </div>
-        <span id="tts-runtime-state">TTS runtime loading...</span>
-        <span id="tts-runtime-summary"></span>
-      </section>
+      <details open class="panel-details" data-panel="tts">
+        <summary>TTS</summary>
+        <section class="tts-panel">
+          <label for="tts-preset">TTS preset</label>
+          <select id="tts-preset">
+            <option value="">Loading presets...</option>
+          </select>
+          <label for="tts-voice">Voice</label>
+          <select id="tts-voice">
+            <option value="">Loading voices...</option>
+          </select>
+          <div class="tts-actions">
+            <button id="tts-load" type="button">Load</button>
+            <button id="tts-unload" type="button">Unload</button>
+          </div>
+          <span id="tts-runtime-state">TTS runtime loading...</span>
+          <span id="tts-runtime-summary"></span>
+        </section>
+      </details>
 
-      <section class="audio-panel">
-        <label for="device">Microphone</label>
-        <select id="device" disabled>
-          <option value="">Default input</option>
-        </select>
-        <div class="meter" aria-label="Input level">
-          <div id="level"></div>
-        </div>
-        <span id="vad-state">VAD idle</span>
-        <span id="asr-state">ASR idle</span>
-        <span id="tts-state">TTS idle</span>
-        <span id="audio-status">Audio idle</span>
-      </section>
+      <details open class="panel-details" data-panel="audio">
+        <summary>Audio</summary>
+        <section class="audio-panel">
+          <label for="device">Microphone</label>
+          <select id="device" disabled>
+            <option value="">Default input</option>
+          </select>
+          <div class="meter" aria-label="Input level">
+            <div id="level"></div>
+          </div>
+          <span id="vad-state">VAD idle</span>
+          <span id="asr-state">ASR idle</span>
+          <span id="tts-state">TTS idle</span>
+          <span id="audio-status">Audio idle</span>
+        </section>
+      </details>
 
       <section class="view-chat">
         <section class="workspace">
@@ -81,6 +93,9 @@
             id="conversation"
             aria-live="polite"
           ></section>
+          <button id="sidebar-toggle" class="sidebar-toggle" type="button">
+            Metrics ▸
+          </button>
           <aside class="side">
             <h2>Latency</h2>
             <dl id="latency"></dl>
@@ -102,6 +117,18 @@
       </section>
 
       <section class="view-companion">
+        <div class="companion-subtabs">
+          <button
+            class="companion-subtab active"
+            data-subtab="chat"
+            type="button"
+          >
+            Chat
+          </button>
+          <button class="companion-subtab" data-subtab="memory" type="button">
+            Memory &amp; Settings
+          </button>
+        </div>
         <section class="companion-config">
           <div class="settings-row">
             <label for="companion-user-name">Your name</label>
