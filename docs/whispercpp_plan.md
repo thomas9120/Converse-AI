@@ -20,7 +20,7 @@ Implement `ASRProvider` protocol against whisper.cpp's HTTP server API.
 |---|---|---|
 | `provider` | `"whisper-cpp"` | Factory selector |
 | `base_url` | `"http://127.0.0.1:8082"` | whisper-server address |
-| `model` | `"ggml-small.en.bin"` | GGML model file path |
+| `model` | `"ggml-small.en.bin"` | GGML/GGUF model file path |
 | `language` | `"en"` | Language code |
 | `temperature` | `0` | Sampling temp (0 = greedy) |
 | `timeout_s` | `120` | HTTP request timeout |
@@ -28,17 +28,19 @@ Implement `ASRProvider` protocol against whisper.cpp's HTTP server API.
 | `reject_utterance_rms` | `0.002` | Existing noise gate — stays in main.py |
 | `trim_silence_rms` | `0.003` | Existing noise gate — stays in main.py |
 
-**Private subprocess management** (modeled on how existing `llamacpp.py` manages llama-server):
+**Private subprocess management** (⚠️ new pattern — `llamacpp.py` is pure HTTP client, no subprocess code):
 
 - `ensure_server()` — start `whisper-server` subprocess if not running. Check via HTTP GET `/health` or `/v1/models`.
 - Command line: `whisper-server --model <path> --port 8082 --no-timestamps` (plus optional `--gpu` backend flag).
 - `stop_server()` — terminate subprocess on `unload()`.
 - Constructor accepts optional pre-existing subprocess handle for external lifecycle management (power users).
+- **Risk:** Port conflict if stale server lingers. Use PID file + startup health poll with timeout. Handle SIGTERM → wait → SIGKILL cascade.
 
 **Transcription flow (`transcribe_audio`):**
 
 1. Convert PCM s16le to WAV in-memory (using existing `audio.py` utilities or `wave` module).
-2. POST WAV bytes to `http://{base_url}/inference` with `Content-Type: audio/wav`.
+2. POST WAV bytes to `http://{base_url}/inference` (or `/v1/audio/transcriptions` — **verify target whisper.cpp version**) with `Content-Type: audio/wav`. whisper.cpp server API has evolved; newer builds use OpenAI-compatible `/v1/audio/transcriptions`. Detect endpoint via `/health` or config key `endpoint`.
+   - **HTTP client:** use `httpx` (existing dependency, used by `llamacpp.py`). Do NOT use `aiohttp` — not in project deps.
 3. Parse response JSON — extract `"text"` field.
 4. Yield single `TranscriptEvent(text=transcript, final=True)`.
 
@@ -52,6 +54,7 @@ Implement `ASRProvider` protocol against whisper.cpp's HTTP server API.
 - `unload()` — calls `stop_server()`. Sends SIGTERM, waits 5s, SIGKILL if still alive.
 - `check_status()` — GET `/health`. Returns `ProviderStatus(ready=True)` on 200, `ready=False` with error message on failure.
 - Property `status` — returns current known state.
+- **`ProviderStatus` fields to set:** `managed_externally=False` (provider owns subprocess), `supports_model_management=False`, `supports_voice_selection=False`. Set `loaded=True` after successful `ensure_server()`.
 
 **Error handling:**
 
@@ -59,11 +62,12 @@ Implement `ASRProvider` protocol against whisper.cpp's HTTP server API.
 - Timeout → wrap POST in `asyncio.wait_for(...)`.
 - Empty/error response → raise `RuntimeError` with server message.
 
-**GGML model path resolution:**
+**GGML/GGUF model path resolution:**
 
 - If `model` is a bare name like `"ggml-small.en.bin"`, look in `models/` subdirectory (same convention as other providers).
 - If `model` is an absolute path, use as-is.
 - Add note in profile comments about running `whisper.cpp/scripts/download-ggml-model.sh small.en` to fetch.
+- **⚠️ Format check:** whisper.cpp has moved from GGML to **GGUF** format. Newer versions expect `.gguf` files, not `.bin`. Verify format convention against target whisper.cpp release before implementing model path logic.
 
 ---
 
@@ -165,7 +169,7 @@ Add check for whisper.cpp: if profile has `"provider": "whisper-cpp"` but `whisp
 - **Integration test (marked as such):** Start `whisper-server` subprocess with small model, transcribe a known WAV file, verify output contains expected text. Mark with `@pytest.mark.integration` so it's skipped in CI if server binary is absent.
 - **Unit test:** `check_status()` returns correct `ProviderStatus` shape.
 - **Unit test:** `load()` / `unload()` lifecycle state transitions.
-- **Mocked HTTP test:** Mock `aiohttp.ClientSession.post` to return known JSON, verify `transcribe_audio()` yields correct transcript.
+- **Mocked HTTP test:** Mock `httpx.AsyncClient.post` (or use `respx` / `pytest-httpx` fixtures) to return known JSON, verify `transcribe_audio()` yields correct transcript. Use `httpx` — project already depends on it.
 
 ---
 
@@ -198,12 +202,27 @@ Add check for whisper.cpp: if profile has `"provider": "whisper-cpp"` but `whisp
 
 ---
 
+---
+
+## Gaps & Risks (from codebase review)
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| Subprocess management is new — no existing template in codebase | Medium | Test lifecycle thoroughly: port conflict, stale PID, crash recovery |
+| whisper-server API endpoint uncertain (`/inference` vs `/v1/audio/transcriptions`) | Medium | Verify against target whisper.cpp version; support both with config key |
+| GGML → GGUF model format transition may affect model path logic | Low-Medium | Check current whisper.cpp model download convention before implementing |
+| `aiohttp` referenced in tests but not in project deps — use `httpx` | Low | Use `httpx` / `respx` / `pytest-httpx` for mocks |
+| `sample_rate` handling unspecified — whisper-server may accept non-16000 Hz | Low | Document accepted rates or add resampling in provider |
+
+---
+
 ## Notes
 
 - **faster-whisper stays default.** All existing profiles unchanged. whisper.cpp profiles are opt-in.
 - **Existing noise rejection in `main.py`** (RMS gates, silence trimming) is provider-agnostic — works as-is with whisper.cpp.
 - **Existing Silero VAD** handles speech boundaries — whisper.cpp doesn't need its own VAD.
 - **No changes to orchestrator.py or main.py** — ASRProvider protocol is the integration boundary.
-- **Subprocess lifecycle mirrors `llamacpp.py`** — that file is the template for how to manage an external server process.
+- **❌ `llamacpp.py` does NOT manage subprocesses** — it is a pure HTTP client that assumes server is already running. Subprocess management in this plan is **new territory** for this codebase. Test lifecycle thoroughly: port conflict, stale PID file, crash recovery.
+- **`sample_rate` handling:** `FasterWhisperASRProvider` raises `ValueError` if not 16000 Hz. whisper-server accepts rate from WAV header, but plan should decide: resample to provider's preferred rate or accept any. Document in provider.
 - **PyPI package whisper-cpp-python** exists as alternative to subprocess management — worth evaluating but start with server mode for lowest latency.
 - **Test with `--processors 1`** to avoid known whisper.cpp Vulkan multi-processor crash on AMD GPUs.

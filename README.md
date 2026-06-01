@@ -33,6 +33,16 @@ Then open `http://127.0.0.1:7860`.
 
 `start.*` now runs a guided launcher. It checks the selected profile, required Python packages, the harness port, provider status, and llama.cpp readiness before starting uvicorn. In an interactive terminal it can prompt for the profile and ask before opening the browser. For non-interactive use, pass `--no-prompt --no-browser`.
 
+On Windows, you can also start a Cloudflare quick tunnel from the launcher:
+
+```powershell
+.\start.ps1 -CloudflareTunnel
+```
+
+The tunnel prints a public Cloudflare URL in the terminal, and the launcher reprints it as `Cloudflare tunnel URL: ...` when detected. Use this only when you intentionally want remote access to your local harness.
+
+If the local readiness check times out but the server process is still running, the launcher still starts the Cloudflare tunnel and warns that the public URL may show a temporary error until the harness finishes warming up.
+
 ## Prerequisites
 
 - **Python 3.11, 3.12, or 3.13** (Python 3.14 is not supported by `kokoro-onnx==0.5.0`; the project venv uses whatever Python created it)
@@ -225,6 +235,8 @@ Examples:
 .\start.ps1 -Port 7861 -Profile profiles/mock-local.json
 .\start.ps1 -ListProfiles
 .\start.ps1 -NoPrompt -NoBrowser
+.\start.ps1 -CloudflareTunnel
+$env:PYTHONPATH = "$(Get-Location)\app"; .\.venv\Scripts\python -m conversational_harness.launch --cloudflare-tunnel
 .\update.ps1
 ```
 

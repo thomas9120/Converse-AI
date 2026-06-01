@@ -4,9 +4,12 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
+import threading
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Sequence
@@ -31,6 +34,9 @@ from conversational_harness.providers import build_providers
 
 
 DEFAULT_PORT = 7860
+DEFAULT_CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+CLOUDFLARED_MIN_BYTES = 1024 * 1024
+CLOUDFLARE_TUNNEL_URL_RE = re.compile(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -42,6 +48,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     interactive = sys.stdin.isatty() and sys.stdout.isatty() and not args.no_prompt
     profile_path = choose_profile(args.profile, profiles, interactive)
+    cloudflare_tunnel = choose_cloudflare_tunnel(args, interactive)
     port = int(args.port or os.environ.get("HARNESS_PORT") or DEFAULT_PORT)
 
     try:
@@ -54,6 +61,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"  Profile: {config.name}")
     print(f"  Path:    {relative_display(config.path)}")
     print(f"  URL:     http://127.0.0.1:{port}")
+    print(f"  Cloudflare tunnel: {'yes' if cloudflare_tunnel else 'no'}")
     print()
 
     if not args.skip_checks:
@@ -71,19 +79,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     env["PYTHONPATH"] = str(PROJECT_ROOT / "app")
 
     process = start_server(port, env)
+    tunnel_process: subprocess.Popen | None = None
     url = f"http://127.0.0.1:{port}"
     try:
         if wait_for_server(url):
             print(f"Server is ready: {url}")
+            tunnel_process = maybe_start_cloudflare_tunnel(cloudflare_tunnel, port, args.cloudflared_url)
             maybe_open_browser(url, args, interactive)
         else:
             print("Server did not report ready before the timeout. Leaving process in foreground.")
+            if process.poll() is None:
+                tunnel_process = maybe_start_cloudflare_tunnel(
+                    cloudflare_tunnel,
+                    port,
+                    args.cloudflared_url,
+                    warning="The local app may still be warming up; the public URL can show a temporary error until it is ready.",
+                )
         return wait_for_process(process)
     except KeyboardInterrupt:
         print()
         print("Stopping harness server...")
         stop_process(process)
         return 130
+    finally:
+        if tunnel_process is not None:
+            stop_process(tunnel_process)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -96,6 +116,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-prompt", action="store_true", help="Disable interactive prompts.")
     parser.add_argument("--skip-checks", action="store_true", help="Skip preflight checks.")
     parser.add_argument("--skip-port-check", action="store_true", help="Skip the preflight port availability check.")
+    parser.add_argument("--cloudflare-tunnel", action="store_true", help="Start a Cloudflare quick tunnel after the server is ready.")
+    parser.add_argument("--no-cloudflare-tunnel", action="store_true", help="Do not prompt for or start a Cloudflare quick tunnel.")
+    parser.add_argument("--cloudflared-url", default=DEFAULT_CLOUDFLARED_URL, help="Windows cloudflared download URL.")
     return parser.parse_args(argv)
 
 
@@ -186,6 +209,94 @@ def start_server(port: int, env: dict[str, str]) -> subprocess.Popen:
     return subprocess.Popen(command, cwd=PROJECT_ROOT, env=env)
 
 
+def start_cloudflare_tunnel(port: int, cloudflared_url: str) -> subprocess.Popen:
+    cloudflared = ensure_cloudflared(cloudflared_url)
+    command = [str(cloudflared), "tunnel", "--url", f"http://localhost:{port}"]
+    print()
+    print(f"Starting Cloudflare Tunnel to http://localhost:{port} ...")
+    print("  Cloudflare will print the public URL below.")
+    print("  Press Ctrl+C to stop the harness and tunnel.")
+    print()
+    process = subprocess.Popen(
+        command,
+        cwd=PROJECT_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    monitor_cloudflared_output(process)
+    return process
+
+
+def maybe_start_cloudflare_tunnel(
+    enabled: bool,
+    port: int,
+    cloudflared_url: str,
+    *,
+    warning: str | None = None,
+) -> subprocess.Popen | None:
+    if not enabled:
+        return None
+    if warning:
+        print(f"[WARN] {warning}", file=sys.stderr)
+    try:
+        return start_cloudflare_tunnel(port, cloudflared_url)
+    except Exception as exc:
+        print(f"[WARN] Cloudflare tunnel was not started: {exc}", file=sys.stderr)
+        return None
+
+
+def monitor_cloudflared_output(process: subprocess.Popen) -> threading.Thread | None:
+    if process.stdout is None:
+        return None
+
+    def worker() -> None:
+        displayed_url = False
+        for raw_line in process.stdout:
+            line = raw_line.rstrip()
+            if line:
+                print(line)
+            if not displayed_url:
+                match = CLOUDFLARE_TUNNEL_URL_RE.search(raw_line)
+                if match:
+                    displayed_url = True
+                    print()
+                    print(f"Cloudflare tunnel URL: {match.group(0)}")
+                    print()
+
+    thread = threading.Thread(target=worker, name="cloudflared-output", daemon=True)
+    thread.start()
+    return thread
+
+
+def ensure_cloudflared(cloudflared_url: str) -> Path:
+    if os.name != "nt":
+        raise RuntimeError("integrated Cloudflare tunnel download is currently supported on Windows only")
+
+    tools_dir = PROJECT_ROOT / "tools"
+    cloudflared = tools_dir / "cloudflared.exe"
+    if cloudflared.exists() and cloudflared.stat().st_size >= CLOUDFLARED_MIN_BYTES:
+        print(f"Using existing cloudflared.exe from {relative_display(tools_dir)}")
+        return cloudflared
+
+    tools_dir.mkdir(exist_ok=True)
+    print("cloudflared.exe not found. Downloading (~54 MB)...")
+    print(f"  {cloudflared_url}")
+    try:
+        urllib.request.urlretrieve(cloudflared_url, cloudflared)
+    except Exception:
+        cloudflared.unlink(missing_ok=True)
+        raise
+
+    if not cloudflared.exists() or cloudflared.stat().st_size < CLOUDFLARED_MIN_BYTES:
+        cloudflared.unlink(missing_ok=True)
+        raise RuntimeError("download appeared to succeed but the file is missing or too small")
+
+    print(f"  Saved to {cloudflared}")
+    return cloudflared
+
+
 def wait_for_server(url: str, *, timeout_s: float = 20.0) -> bool:
     deadline = time.monotonic() + timeout_s
     status_url = f"{url}/api/status"
@@ -209,6 +320,17 @@ def maybe_open_browser(url: str, args: argparse.Namespace, interactive: bool) ->
         should_open = answer in ("", "y", "yes")
     if should_open:
         webbrowser.open(url)
+
+
+def choose_cloudflare_tunnel(args: argparse.Namespace, interactive: bool) -> bool:
+    if args.no_cloudflare_tunnel:
+        return False
+    if args.cloudflare_tunnel:
+        return True
+    if not interactive:
+        return False
+    answer = input("Start Cloudflare tunnel? [y/N] ").strip().lower()
+    return answer in ("y", "yes")
 
 
 def wait_for_process(process: subprocess.Popen) -> int:
