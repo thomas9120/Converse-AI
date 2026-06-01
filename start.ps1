@@ -6,7 +6,9 @@ param(
   [switch]$NoPrompt,
   [switch]$SkipChecks,
   [switch]$SkipPortCheck,
-  [switch]$ListProfiles
+  [switch]$ListProfiles,
+  [switch]$CloudflareTunnel,
+  [switch]$NoCloudflareTunnel
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,6 +49,12 @@ if ($SkipPortCheck) {
 }
 if ($ListProfiles) {
   $launchArgs += "--list-profiles"
+}
+if ($CloudflareTunnel) {
+  $launchArgs += "--cloudflare-tunnel"
+}
+if ($NoCloudflareTunnel) {
+  $launchArgs += "--no-cloudflare-tunnel"
 }
 
 .\.venv\Scripts\python @launchArgs
